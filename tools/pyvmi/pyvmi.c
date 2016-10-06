@@ -2164,11 +2164,28 @@ static PyMethodDef PyVmiMethods[] = {
     {NULL, NULL, 0, NULL}
 };
 
+struct module_state {
+    PyObject *error;
+};
+
+
+static struct PyModuleDef pyvmi_def = {
+    PyModuleDef_HEAD_INIT,
+    "pyvmi",
+    NULL,
+    sizeof(struct module_state),
+    PyVmiMethods,
+    NULL,
+    NULL,
+    NULL,
+    NULL
+};
+
 PyMODINIT_FUNC
-initpyvmi(
+PyInit_pyvmi(
     void)
 {
-    (void) Py_InitModule("pyvmi", PyVmiMethods);
+    return PyModule_Create(&pyvmi_def);
 }
 
 int
@@ -2183,7 +2200,7 @@ main(
     Py_Initialize();
 
     /* Add a static module */
-    initpyvmi();
+    PyInit_pyvmi();
 
     return 0;
 }
