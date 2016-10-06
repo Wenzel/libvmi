@@ -75,12 +75,12 @@ pyvmi_add_to_config(
 
             ret=VMI_SUCCESS;
 
-        } else if(PyInt_Check(pyvalue)) {
+        } else if(PyLong_Check(pyvalue)) {
 
             // Numeric values are given by value by Python, so these have to be buffered
             if(config->num_entries < MAX_CONFIG_BUFFER) {
 
-                config->buffer[config->num_entries] = PyInt_AsUnsignedLongMask(pyvalue);
+                config->buffer[config->num_entries] = PyLong_AsUnsignedLongMask(pyvalue);
                 g_hash_table_insert(config->table, key, &(config->buffer[config->num_entries]));
                 config->num_entries++;
                 ret=VMI_SUCCESS;
