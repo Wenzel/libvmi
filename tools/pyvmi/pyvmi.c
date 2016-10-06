@@ -62,11 +62,11 @@ pyvmi_add_to_config(
 {
     status_t ret=VMI_FAILURE;
 
-    if(PyString_Check(pykey)) {
+    if(PyUnicode_Check(pykey)) {
 
         char *key = PyString_AS_STRING(pykey);
 
-        if(PyString_Check(pyvalue)) {
+        if(PyUnicode_Check(pyvalue)) {
 
             // We can insert the string pointers directly to the ghashtable
             // as Python gave us a pointer and it has the data (we don't need to dup the string here).
