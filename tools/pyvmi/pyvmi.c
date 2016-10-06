@@ -2133,7 +2133,7 @@ pyvmi_instance_repr(
     char buf[100];
 
     snprintf(buf, 100, "<pyvmi_instance for %s>", desc(self));
-    return PyString_FromString(buf);
+    return PyBytes_FromString(buf);
 }
 
 // Type object itself
