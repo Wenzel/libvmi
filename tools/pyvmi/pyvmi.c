@@ -38,7 +38,7 @@
 #define MAX_CONFIG_BUFFER 20
 
 // PyVmi instance type fwdref
-staticforward PyTypeObject pyvmi_instance_Type;
+static PyTypeObject pyvmi_instance_Type;
 
 typedef struct {
     addr_t buffer[MAX_CONFIG_BUFFER];
