@@ -2123,7 +2123,8 @@ pyvmi_instance_getattr(
     PyObject * self,
     char *attrname)
 {
-    return Py_FindMethod(pyvmi_instance_methods, self, attrname);
+    PyObject* name = PyUnicode_Decode(attrname, strlen(attrname) + 1, "UTF-8", NULL);
+    return PyObject_GenericGetAttr(self, name);
 }
 
 static PyObject *
@@ -2194,7 +2195,7 @@ main(
     char *argv[])
 {
     /* Pass argv[0] to the Python interpreter */
-    PyObject* program_unicode = PyUnicode_Decode(argv[0], strlen(argv[0] + 1), "utf-8", NULL);
+    PyObject* program_unicode = PyUnicode_Decode(argv[0], strlen(argv[0] + 1), "UTF-8", NULL);
     wchar_t* w_program = PyUnicode_AsWideCharString(program_unicode, NULL);
     Py_SetProgramName(w_program);
 
