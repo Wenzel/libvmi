@@ -64,13 +64,13 @@ pyvmi_add_to_config(
 
     if(PyUnicode_Check(pykey)) {
 
-        char *key = PyString_AS_STRING(pykey);
+        char *key = PyUnicode_AsUTF8(pykey);
 
         if(PyUnicode_Check(pyvalue)) {
 
             // We can insert the string pointers directly to the ghashtable
             // as Python gave us a pointer and it has the data (we don't need to dup the string here).
-            char *svalue=PyString_AS_STRING(pyvalue);
+            char *svalue = PyUnicode_AsUTF8(pyvalue);
             g_hash_table_insert(config->table, key, svalue);
 
             ret=VMI_SUCCESS;
