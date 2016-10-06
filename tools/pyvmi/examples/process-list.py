@@ -85,7 +85,7 @@ def main(argv):
         print("Process listing for VM {}".format(vmi.get_name()))
 
     for pid, procname in processes(vmi):
-        print "[%5d] %s" % (pid, procname)
+        print("[{}] {}".format(pid, procname))
 
 if __name__ == "__main__":
     main(sys.argv)
