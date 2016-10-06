@@ -178,8 +178,8 @@ pyvmi_init(
         desc(object)=vmname;
     } else {
         uint64_t domid = vmi_get_vmid(vmi(object));
-        char *domidstring = malloc(snprintf(NULL, 0, "domid-%u", domid)+1);
-        sprintf(domidstring, "domid-%u", domid);
+        char *domidstring = malloc(snprintf(NULL, 0, "domid-%" PRIu64, domid)+1);
+        sprintf(domidstring, "domid-%" PRIu64, domid);
         desc(object)=domidstring;
     }
 
