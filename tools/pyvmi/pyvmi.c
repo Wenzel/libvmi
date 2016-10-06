@@ -2194,7 +2194,9 @@ main(
     char *argv[])
 {
     /* Pass argv[0] to the Python interpreter */
-    Py_SetProgramName(argv[0]);
+    PyObject* program_unicode = PyUnicode_Decode(argv[0], strlen(argv[0] + 1), "utf-8", NULL);
+    wchar_t* w_program = PyUnicode_AsWideCharString(program_unicode, NULL);
+    Py_SetProgramName(w_program);
 
     /* Initialize the Python interpreter.  Required. */
     Py_Initialize();
