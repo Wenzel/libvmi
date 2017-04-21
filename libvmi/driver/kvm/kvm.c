@@ -139,6 +139,16 @@ exec_info_registers(
 }
 
 static char *
+exec_info_version(
+    kvm_instance_t *kvm)
+{
+    char *query =
+        "'{\"execute\": \"human-monitor-command\", \"arguments\": {\"command-line\": \"info version\"}}'";
+    return exec_qmp_cmd(kvm, query);
+}
+
+
+static char *
 exec_memory_access(
     kvm_instance_t *kvm)
 {
@@ -1369,6 +1379,17 @@ kvm_init_vmi(
         return VMI_FAILURE;
     }
     vmi->num_vcpus = info.nrVirtCpu;
+
+#ifndef HAVE_LIBVMI_REQUEST
+    char *version = exec_info_version(kvm);
+    dbprint(VMI_DEBUG_KVM, "--Checking QEMU version string : %s", version);
+    // find substring "vmi"
+    if (strstr(version, "vmi"))
+    {
+        dbprint(VMI_DEBUG_KVM, "--Failure: QEMU has the new request definition but not libvmi\n");
+        return VMI_FAILURE;
+    }
+#endif
 
 #if ENABLE_SHM_SNAPSHOT == 1
     /* get the memory size in advance for
