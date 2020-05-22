@@ -686,6 +686,7 @@ kvm_events_destroy(
         return;
     }
 #endif
+    dbprint(VMI_DEBUG_KVM, "--Destroying KVM driver events\n");
     // disable CR/MSR/singlestep monitoring
     for (unsigned int vcpu = 0; vcpu < vmi->num_vcpus; vcpu++) {
         if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_CR, false))
