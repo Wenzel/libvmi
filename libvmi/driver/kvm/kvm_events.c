@@ -638,10 +638,12 @@ kvm_events_init(
     kvm->process_event[KVMI_EVENT_PAUSE_VCPU] = &process_pause_event;
     kvm->process_event[KVMI_EVENT_SINGLESTEP] = &process_singlestep;
 
-    // enable monitoring of CR and MSR for all VCPUs by default
-    // since this has no performance cost
-    // the interception is activated only when specific registers
-    // have been defined via kvmi_control_cr(), kvmi_control_msr()
+    // enable monitoring of CR/MSR/singlestep for all VCPUs by default
+    // since this has no performance cost (this API DOESNT intercept events)
+    // the interception is activated only when specific API will be called:
+    //  CR:         kvmi_control_cr()
+    //  MSR:        kvmi_control_msr()
+    //  singlestep: kvmi_control_singlestep()
     for (unsigned int vcpu = 0; vcpu < vmi->num_vcpus; vcpu++) {
         if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_CR, true)) {
             errprint("--Failed to enable CR monitoring\n");
@@ -651,14 +653,20 @@ kvm_events_init(
             errprint("--Failed to enable MSR monitoring\n");
             goto err_exit;
         }
+
+        if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_SINGLESTEP, true)) {
+            errprint("--Failed to enable singlestep monitoring\n");
+            goto err_exit;
+        }
     }
 
     return VMI_SUCCESS;
 err_exit:
-    // disable CR/MSR monitoring
+    // disable CR/MSR/singlestep monitoring
     for (unsigned int vcpu = 0; vcpu < vmi->num_vcpus; vcpu++) {
         kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_CR, false);
         kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_MSR, false);
+        kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_SINGLESTEP, false);
     }
     return VMI_FAILURE;
 }
@@ -676,12 +684,14 @@ kvm_events_destroy(
         return;
     }
 #endif
-    // disable CR/MSR monitoring
+    // disable CR/MSR/singlestep monitoring
     for (unsigned int vcpu = 0; vcpu < vmi->num_vcpus; vcpu++) {
         if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_CR, false))
             errprint("--Failed to disable CR monitoring\n");
         if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_MSR, false))
             errprint("--Failed to disable MSR monitoring\n");
+        if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_SINGLESTEP, false))
+            errprint("--Failed to disable singlestep monitoring\n");
     }
 }
 
@@ -1064,10 +1074,6 @@ kvm_start_single_step(
         for (unsigned int vcpu = 0; vcpu < vmi->num_vcpus; vcpu++) {
             if ( CHECK_VCPU_SINGLESTEP(*event, vcpu) ) {
                 dbprint(VMI_DEBUG_KVM, "--Setting MTF flag on vcpu %" PRIu32 "\n", vcpu);
-                if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_SINGLESTEP, true)) {
-                    errprint("%s: kvmi_control_events failed: %s\n", __func__, strerror(errno));
-                    goto rewind;
-                }
 
                 // toggle singlestepping
                 if (kvm->libkvmi.kvmi_control_singlestep(kvm->kvmi_dom, vcpu, true)) {
@@ -1107,10 +1113,6 @@ kvm_stop_single_step(
 #endif
 
     dbprint(VMI_DEBUG_KVM, "--Disable MTF flag on vcpu %" PRIu32 "\n", vcpu);
-    if (kvm->libkvmi.kvmi_control_events(kvm->kvmi_dom, vcpu, KVMI_EVENT_SINGLESTEP, false)) {
-        errprint("%s: kvmi_control_events failed: %s\n", __func__, strerror(errno));
-        return VMI_FAILURE;
-    }
 
     if (kvm->libkvmi.kvmi_control_singlestep(kvm->kvmi_dom, vcpu, false)) {
         errprint("%s: kvmi_control_singlestep failed: %s\n", __func__, strerror(errno));
