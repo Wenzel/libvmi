@@ -75,4 +75,8 @@ kvm_stop_single_step(
         vmi_instance_t vmi,
         uint32_t vcpu);
 
+status_t
+kvm_shutdown_single_step(
+    vmi_instance_t vmi);
+
 #endif // KVM_EVENTS_H
