@@ -723,6 +723,7 @@ kvm_events_listen(
         if (kvm->libkvmi.kvmi_wait_event(kvm->kvmi_dom, (kvmi_timeout_t)timeout)) {
             if (errno == ETIMEDOUT) {
                 // no events !
+                dbprint(VMI_DEBUG_KVM, "--No events. Exiting.\n");
                 return VMI_SUCCESS;
             }
             errprint("%s: kvmi_wait_event failed: %s\n", __func__, strerror(errno));
