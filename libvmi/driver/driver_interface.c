@@ -28,36 +28,38 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <libmicrovmi.h>
+
 #include "private.h"
 #include "driver/driver_interface.h"
 
-
-
-status_t driver_init_mode(const char *name,
-                          uint64_t domainid,
-                          uint64_t init_flags,
-                          vmi_init_data_t *init_data,
+status_t driver_init_mode(const char *UNUSED(name),
+                          uint64_t UNUSED(domainid),
+                          uint64_t UNUSED(init_flags),
+                          vmi_init_data_t *UNUSED(init_data),
                           vmi_mode_t *mode)
 {
-    unsigned long count = 0;
 
-    /* if we didn't see exactly one system, report error */
-    if (count == 0) {
-        errprint("Could not find a live guest VM or file to use.\n");
-        errprint("Opening a live guest VM requires root access.\n");
-        return VMI_FAILURE;
-    } else if (count > 1) {
-        errprint
-        ("Found more than one VMM or file to use,\nplease specify what you want instead of using VMI_AUTO.\n");
-        return VMI_FAILURE;
-    } else { // count == 1
-        return VMI_SUCCESS;
-    }
+    // /* if we didn't see exactly one system, report error */
+    // if (count == 0) {
+    //     errprint("Could not find a live guest VM or file to use.\n");
+    //     errprint("Opening a live guest VM requires root access.\n");
+    //     return VMI_FAILURE;
+    // } else if (count > 1) {
+    //     errprint
+    //     ("Found more than one VMM or file to use,\nplease specify what you want instead of using VMI_AUTO.\n");
+    //     return VMI_FAILURE;
+    // } else { // count == 1
+
+    // driver detection is not supported in libmicrovmi yet
+    // assume Xen for now
+    *mode = VMI_XEN;
+    return VMI_SUCCESS;
 }
 
 status_t driver_init(vmi_instance_t vmi,
-                     uint32_t init_flags,
-                     vmi_init_data_t *init_data)
+                     uint32_t UNUSED(init_flags),
+                     vmi_init_data_t *UNUSED(init_data))
 {
     status_t rc = VMI_FAILURE;
     if (vmi->driver.initialized) {
@@ -67,24 +69,28 @@ status_t driver_init(vmi_instance_t vmi,
 
     bzero(&vmi->driver, sizeof(driver_interface_t));
 
-    switch (vmi->mode) {
-        default:
-            break;
-    };
-
-    if (rc == VMI_SUCCESS && vmi->driver.init_ptr)
-        rc = vmi->driver.init_ptr(vmi, init_flags, init_data);
+    rc = VMI_SUCCESS;
 
     return rc;
 }
 
 status_t driver_init_vmi(vmi_instance_t vmi,
-                         uint32_t init_flags,
-                         vmi_init_data_t *init_data)
+                         uint32_t UNUSED(init_flags),
+                         vmi_init_data_t *UNUSED(init_data))
 {
     status_t rc = VMI_FAILURE;
-    if (vmi->driver.init_vmi_ptr)
-        rc = vmi->driver.init_vmi_ptr(vmi, init_flags, init_data);
+
+    // initialize Libmicrovmi
+    const char *name = vmi->driver.name;
+
+    // hardcode Xen
+    const DriverType drv_type = Xen;
+    void *driver = microvmi_init(name, &drv_type);
+    if (driver) {
+        vmi->driver.microvmi_driver = driver;
+        vmi->driver.initialized = true;
+        rc = VMI_SUCCESS;
+    }
 
     return rc;
 }

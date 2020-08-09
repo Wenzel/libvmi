@@ -28,6 +28,8 @@
 #ifndef DRIVER_WRAPPER_H
 #define DRIVER_WRAPPER_H
 
+#include <libmicrovmi.h>
+
 #include "private.h"
 
 /*
@@ -40,9 +42,11 @@ driver_destroy(
     vmi_instance_t vmi)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (vmi->driver.initialized && vmi->driver.destroy_ptr)
+    if (!vmi->driver.initialized)
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_destroy function not implemented.\n");
 #endif
-        vmi->driver.destroy_ptr(vmi);
+    if (vmi->driver.microvmi_driver)
+        microvmi_destroy(vmi->driver.microvmi_driver);
 
     bzero(&vmi->driver, sizeof(driver_interface_t));
 }
@@ -52,14 +56,9 @@ driver_get_id_from_name(
     vmi_instance_t vmi,
     const char *name)
 {
-#ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.get_id_from_name_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_get_id_from_name function not implemented.\n");
-        return 0;
-    }
-#endif
-
-    return vmi->driver.get_id_from_name_ptr(vmi, name);
+    printf("get_id_from_name: %s\n", name);
+    vmi->driver.name = strndup(name, 500);
+    return 1;
 }
 
 static inline status_t
@@ -185,18 +184,14 @@ driver_get_xsave_info(
 
 static inline status_t
 driver_get_memsize(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     uint64_t *allocated_ram_size,
     addr_t *max_physical_address)
 {
-#ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.get_memsize_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_get_memsize function not implemented.\n");
-        return VMI_FAILURE;
-    }
-#endif
-
-    return vmi->driver.get_memsize_ptr(vmi, allocated_ram_size, max_physical_address);
+    // return fake data for now
+    *allocated_ram_size = 0x59700000;
+    *max_physical_address = 0x59700000;
+    return VMI_SUCCESS;
 }
 
 static inline status_t
