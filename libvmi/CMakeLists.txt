@@ -35,6 +35,14 @@ set(VMI_PUBLIC_DEPS "")
 
 # create libvmi.so
 add_library (vmi_shared SHARED $<TARGET_OBJECTS:vmi>)
+
+# libvmi depends on libmicrovmi
+target_include_directories(vmi_shared PRIVATE ${Libmicrovmi_INCLUDE_DIRS})
+target_link_libraries(vmi_shared PRIVATE ${Libmicrovmi_LIBRARIES})
+
+# performance.c uses math.h in implementation
+target_link_libraries(vmi_shared PRIVATE m)
+list(APPEND VMI_PUBLIC_DEPS m)
 # one libvmi_extra.h function returns a GSList*
 target_link_libraries(vmi_shared PUBLIC ${GLIB_LDFLAGS})
 # cleanup GLIB_LDFLAGS (remove -l prefix)

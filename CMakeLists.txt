@@ -22,6 +22,7 @@ endif()
 #                              DEPENDENCIES
 #-----------------------------------------------------------------------------
 include(FeatureSummary)
+find_package(Libmicrovmi REQUIRED)
 find_package(PkgConfig REQUIRED)
 set_package_properties(PkgConfig PROPERTIES
     DESCRIPTION "Helper tool to compile applications and libraries"
