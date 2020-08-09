@@ -12,6 +12,3 @@ if (ENABLE_BAREFLANK)
     endif ()
 endif ()
 
-if (ENABLE_XEN)
-    add_subdirectory(xen)
-endif ()
