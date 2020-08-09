@@ -35,10 +35,6 @@
 #include "driver/file/file.h"
 #endif
 
-#ifdef ENABLE_KVM
-#include "driver/kvm/kvm.h"
-#endif
-
 #ifdef ENABLE_BAREFLANK
 #include "driver/bareflank/bareflank.h"
 #endif
@@ -51,13 +47,6 @@ status_t driver_init_mode(const char *name,
 {
     unsigned long count = 0;
 
-#ifdef ENABLE_KVM
-    if (VMI_SUCCESS == kvm_test(domainid, name, init_flags, init_data)) {
-        dbprint(VMI_DEBUG_DRIVER, "--found KVM\n");
-        *mode = VMI_KVM;
-        count++;
-    }
-#endif
 #ifdef ENABLE_FILE
     if (VMI_SUCCESS == file_test(domainid, name, init_flags, init_data)) {
         dbprint(VMI_DEBUG_DRIVER, "--found file\n");
@@ -100,11 +89,6 @@ status_t driver_init(vmi_instance_t vmi,
     bzero(&vmi->driver, sizeof(driver_interface_t));
 
     switch (vmi->mode) {
-#ifdef ENABLE_KVM
-        case VMI_KVM:
-            rc = driver_kvm_setup(vmi);
-            break;
-#endif
 #ifdef ENABLE_FILE
         case VMI_FILE:
             rc = driver_file_setup(vmi);
