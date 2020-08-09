@@ -31,9 +31,6 @@
 #include "private.h"
 #include "driver/driver_interface.h"
 
-#ifdef ENABLE_FILE
-#include "driver/file/file.h"
-#endif
 
 
 status_t driver_init_mode(const char *name,
@@ -43,14 +40,6 @@ status_t driver_init_mode(const char *name,
                           vmi_mode_t *mode)
 {
     unsigned long count = 0;
-
-#ifdef ENABLE_FILE
-    if (VMI_SUCCESS == file_test(domainid, name, init_flags, init_data)) {
-        dbprint(VMI_DEBUG_DRIVER, "--found file\n");
-        *mode = VMI_FILE;
-        count++;
-    }
-#endif
 
     /* if we didn't see exactly one system, report error */
     if (count == 0) {
@@ -79,11 +68,6 @@ status_t driver_init(vmi_instance_t vmi,
     bzero(&vmi->driver, sizeof(driver_interface_t));
 
     switch (vmi->mode) {
-#ifdef ENABLE_FILE
-        case VMI_FILE:
-            rc = driver_file_setup(vmi);
-            break;
-#endif
         default:
             break;
     };

@@ -173,7 +173,6 @@ if (ENABLE_BAREFLANK)
     endif ()
 endif ()
 
-add_subdirectory(driver)
 add_subdirectory(os)
 
 
