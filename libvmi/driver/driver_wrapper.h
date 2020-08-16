@@ -397,13 +397,16 @@ driver_resume_vm(
     vmi_instance_t vmi)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.resume_vm_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_resume_vm function not implemented.\n");
+    if (!vmi->driver.initialized) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver not initialized\n");
         return VMI_FAILURE;
     }
 #endif
 
-    return vmi->driver.resume_vm_ptr(vmi);
+    void* driver = vmi->driver.microvmi_driver;
+    if (MicrovmiSuccess != microvmi_resume(driver))
+        return VMI_FAILURE;
+    return VMI_SUCCESS;
 }
 
 static inline status_t
