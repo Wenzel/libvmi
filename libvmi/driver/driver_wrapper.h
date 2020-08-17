@@ -57,7 +57,6 @@ driver_get_id_from_name(
     vmi_instance_t vmi,
     const char *name)
 {
-    printf("get_id_from_name: %s\n", name);
     vmi->driver.name = strndup(name, 500);
     return 1;
 }
