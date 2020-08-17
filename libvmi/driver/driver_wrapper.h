@@ -387,7 +387,7 @@ driver_pause_vm(
 #endif
 
     void* driver = vmi->driver.microvmi_driver;
-    if (MicrovmiSuccess != microvmi_pause(driver))
+    if (!microvmi_pause(driver))
         return VMI_FAILURE;
     return VMI_SUCCESS;
 }
@@ -404,7 +404,7 @@ driver_resume_vm(
 #endif
 
     void* driver = vmi->driver.microvmi_driver;
-    if (MicrovmiSuccess != microvmi_resume(driver))
+    if (microvmi_resume(driver))
         return VMI_FAILURE;
     return VMI_SUCCESS;
 }

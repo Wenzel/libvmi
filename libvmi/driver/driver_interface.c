@@ -81,13 +81,13 @@ status_t driver_init_vmi(vmi_instance_t vmi,
     status_t rc = VMI_FAILURE;
 
     // initialize libmicrovmi logger
-    microvmi_init_envlogger();
+    microvmi_envlogger_init();
     // initialize libmicrovmi
     const char *name = vmi->driver.name;
 
     // hardcode Xen
     const DriverType drv_type = Xen;
-    void *driver = microvmi_init(name, &drv_type);
+    void *driver = microvmi_init(name, &drv_type, NULL);
     if (driver) {
         vmi->driver.microvmi_driver = driver;
         vmi->driver.initialized = true;
