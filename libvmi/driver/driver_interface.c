@@ -31,7 +31,36 @@
 #include <libmicrovmi.h>
 
 #include "private.h"
+#include "memory_cache.h"
 #include "driver/driver_interface.h"
+
+// get data memory cache callback
+static void*
+get_data(vmi_instance_t vmi, addr_t paddr, uint32_t len)
+{
+    void *buffer = g_try_malloc0(len);
+    if (!buffer)
+        return NULL;
+
+    void *driver = vmi->driver.microvmi_driver;
+    if (!microvmi_read_physical(driver, (uint64_t)paddr, buffer, (size_t)len)) {
+        g_free(buffer);
+        return NULL;
+    }
+    return buffer;
+}
+
+// release data memory cache callback
+static void
+release_data(
+    vmi_instance_t UNUSED(vmi),
+    void *memory,
+    size_t UNUSED(length))
+{
+    if (memory)
+        g_free(memory);
+}
+
 
 status_t driver_init_mode(const char *UNUSED(name),
                           uint64_t UNUSED(domainid),
@@ -88,11 +117,14 @@ status_t driver_init_vmi(vmi_instance_t vmi,
     // hardcode Xen
     const DriverType drv_type = Xen;
     void *driver = microvmi_init(name, &drv_type, NULL);
-    if (driver) {
-        vmi->driver.microvmi_driver = driver;
-        vmi->driver.initialized = true;
-        rc = VMI_SUCCESS;
-    }
+    if (!driver)
+        return rc;
+    // (re)init cache
+    memory_cache_destroy(vmi);
+    memory_cache_init(vmi, get_data, release_data, 0);
+    vmi->driver.microvmi_driver = driver;
+    vmi->driver.initialized = true;
+    rc = VMI_SUCCESS;
 
     return rc;
 }
