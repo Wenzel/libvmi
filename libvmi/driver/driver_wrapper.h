@@ -31,6 +31,7 @@
 #include <libmicrovmi.h>
 
 #include "private.h"
+#include "memory_cache.h"
 
 /*
  * The following functions are safety-wrappers that should be used internally
@@ -319,13 +320,14 @@ driver_read_page(
     addr_t page)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.read_page_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_read_page function not implemented.\n");
+    if (!vmi->driver.initialized) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver is not initialized\n");
         return NULL;
     }
 #endif
 
-    return vmi->driver.read_page_ptr(vmi, page);
+    addr_t paddr = page << vmi->page_shift;
+    return memory_cache_insert(vmi, paddr);
 }
 
 static inline void *
