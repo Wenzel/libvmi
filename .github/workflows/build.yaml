@@ -1,0 +1,60 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  libvmi:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: install LibVMI dependencies
+        run: sudo apt-get install -y libjson-c-dev libxen-dev
+      - name: install stable Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          default: true
+        
+      - name: clone libmicrovmi
+        uses: actions/checkout@v2
+        with:
+          repository: Wenzel/libmicrovmi
+          path: libmicrovmi
+      - name: build and install libmicrovmi library
+        run: |
+          cargo build --features xen
+          sudo cp target/debug/libmicrovmi.so /usr/local/lib
+        working-directory: libmicrovmi
+      - name: install cbindgen
+        uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: --force cbindgen
+      - name: build and install libmicrovmi header
+        run: |
+          make
+          sudo cp libmicrovmi.h /usr/local/include
+        working-directory: libmicrovmi/c_examples
+
+      - name: clone LibVMI
+        uses: actions/checkout@v2
+      - name: debug
+        run: |
+          pwd
+          ls -l
+          ls -l ..
+          ls -l $GITHUB_WORKSPACE
+      - name: configure LibVMI
+        run: cmake -B_build -DENABLE_KVM=OFF -DENABLE_BAREFLANK=OFF .
+      - name: build LibVMI
+        run: make
+        working-directory: _build
+      - name: install LibVMI
+        run: sudo make install
+        working-directory: _build
+
