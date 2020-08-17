@@ -255,13 +255,171 @@ driver_get_vcpureg(
     unsigned long vcpu)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.get_vcpureg_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_get_vcpureg function not implemented.\n");
+    if (!vmi->driver.initialized) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver is not initialized.\n");
         return VMI_FAILURE;
     }
 #endif
 
-    return vmi->driver.get_vcpureg_ptr(vmi, value, reg, vcpu);
+    void *driver = vmi->driver.microvmi_driver;
+    Registers regs;
+    if (!microvmi_read_registers(driver, (uint16_t)vcpu, &regs))
+        return VMI_FAILURE;
+
+    switch (reg) {
+        case RAX:
+            *value = (reg_t) regs.x86._0.rax;
+            break;
+        case RBX:
+            *value = (reg_t) regs.x86._0.rbx;
+            break;
+        case RCX:
+            *value = (reg_t) regs.x86._0.rcx;
+            break;
+        case RDX:
+            *value = (reg_t) regs.x86._0.rdx;
+            break;
+        case RBP:
+            *value = (reg_t) regs.x86._0.rbp;
+            break;
+        case RSI:
+            *value = (reg_t) regs.x86._0.rsi;
+            break;
+        case RDI:
+            *value = (reg_t) regs.x86._0.rdi;
+            break;
+        case RSP:
+            *value = (reg_t) regs.x86._0.rsp;
+            break;
+        case R8:
+            *value = (reg_t) regs.x86._0.r8;
+            break;
+        case R9:
+            *value = (reg_t) regs.x86._0.r9;
+            break;
+        case R10:
+            *value = (reg_t) regs.x86._0.r10;
+            break;
+        case R11:
+            *value = (reg_t) regs.x86._0.r11;
+            break;
+        case R12:
+            *value = (reg_t) regs.x86._0.r12;
+            break;
+        case R13:
+            *value = (reg_t) regs.x86._0.r13;
+            break;
+        case R14:
+            *value = (reg_t) regs.x86._0.r14;
+            break;
+        case R15:
+            *value = (reg_t) regs.x86._0.r15;
+            break;
+        case RIP:
+            *value = (reg_t) regs.x86._0.rip;
+            break;
+        case RFLAGS:
+            *value = (reg_t) regs.x86._0.rflags;
+            break;
+        case CR0:
+            *value = (reg_t) regs.x86._0.cr0;
+            break;
+        case CR2:
+            *value = (reg_t) regs.x86._0.cr2;
+            break;
+        case CR3:
+            *value = (reg_t) regs.x86._0.cr3;
+            break;
+        case CR4:
+            *value = (reg_t) regs.x86._0.cr4;
+            break;
+        case CS_SEL:
+            *value = (reg_t) regs.x86._0.cs.selector;
+            break;
+        case DS_SEL:
+            *value = (reg_t) regs.x86._0.ds.selector;
+            break;
+        case ES_SEL:
+            *value = (reg_t) regs.x86._0.es.selector;
+            break;
+        case FS_SEL:
+            *value = (reg_t) regs.x86._0.fs.selector;
+            break;
+        case GS_SEL:
+            *value = (reg_t) regs.x86._0.gs.selector;
+            break;
+        case SS_SEL:
+            *value = (reg_t) regs.x86._0.ss.selector;
+            break;
+        case TR_SEL:
+            *value = (reg_t) regs.x86._0.tr.selector;
+            break;
+        case CS_LIMIT:
+            *value = (reg_t) regs.x86._0.cs.limit;
+            break;
+        case DS_LIMIT:
+            *value = (reg_t) regs.x86._0.ds.limit;
+            break;
+        case ES_LIMIT:
+            *value = (reg_t) regs.x86._0.es.limit;
+            break;
+        case FS_LIMIT:
+            *value = (reg_t) regs.x86._0.fs.limit;
+            break;
+        case GS_LIMIT:
+            *value = (reg_t) regs.x86._0.gs.limit;
+            break;
+        case SS_LIMIT:
+            *value = (reg_t) regs.x86._0.ss.limit;
+            break;
+        case TR_LIMIT:
+            *value = (reg_t) regs.x86._0.tr.limit;
+            break;
+        case CS_BASE:
+            *value = (reg_t) regs.x86._0.cs.base;
+            break;
+        case DS_BASE:
+            *value = (reg_t) regs.x86._0.ds.base;
+            break;
+        case ES_BASE:
+            *value = (reg_t) regs.x86._0.es.base;
+            break;
+        case FS_BASE:
+            *value = (reg_t) regs.x86._0.fs.base;
+            break;
+        case GS_BASE:
+            *value = (reg_t) regs.x86._0.gs.base;
+            break;
+        case SS_BASE:
+            *value = (reg_t) regs.x86._0.ss.base;
+            break;
+        case TR_BASE:
+            *value = (reg_t) regs.x86._0.tr.base;
+            break;
+        case SYSENTER_CS:
+            *value = (reg_t) regs.x86._0.sysenter_cs;
+            break;
+        case SYSENTER_ESP:
+            *value = (reg_t) regs.x86._0.sysenter_esp;
+            break;
+        case SYSENTER_EIP:
+            *value = (reg_t) regs.x86._0.sysenter_eip;
+            break;
+        case MSR_LSTAR:
+            *value = (reg_t) regs.x86._0.msr_lstar;
+            break;
+        case MSR_EFER:
+            *value = (reg_t) regs.x86._0.msr_efer;
+            break;
+        case MSR_STAR:
+            *value = (reg_t) regs.x86._0.msr_star;
+            break;
+        default:
+            errprint("Unimplemented register %ld\n", reg);
+            return VMI_FAILURE;
+    }
+
+    return VMI_SUCCESS;
 }
 
 static inline status_t
