@@ -414,6 +414,18 @@ driver_get_vcpureg(
         case MSR_STAR:
             *value = (reg_t) regs.x86._0.msr_star;
             break;
+        case IDTR_BASE:
+            *value = (reg_t) regs.x86._0.idt.base;
+            break;
+        case IDTR_LIMIT:
+            *value = (reg_t) regs.x86._0.idt.limit;
+            break;
+        case GDTR_BASE:
+            *value = (reg_t) regs.x86._0.gdt.base;
+            break;
+        case GDTR_LIMIT:
+            *value = (reg_t) regs.x86._0.gdt.limit;
+            break;
         default:
             errprint("Unimplemented register %ld\n", reg);
             return VMI_FAILURE;
