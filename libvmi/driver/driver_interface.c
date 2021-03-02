@@ -114,11 +114,16 @@ status_t driver_init_vmi(vmi_instance_t vmi,
     // initialize libmicrovmi
     const char *name = vmi->driver.name;
 
+    const char* init_error = NULL;
     // hardcode Xen
     const DriverType drv_type = Xen;
-    void *driver = microvmi_init(name, &drv_type, NULL);
-    if (!driver)
+    void *driver = microvmi_init(name, &drv_type, NULL, &init_error);
+    if (!driver) {
+        errprint((char*)init_error);
+        rs_cstring_free((char*)init_error);
         return rc;
+    }
+
     // (re)init cache
     memory_cache_destroy(vmi);
     memory_cache_init(vmi, get_data, release_data, 0);
