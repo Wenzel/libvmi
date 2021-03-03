@@ -62,27 +62,34 @@ release_data(
 }
 
 
-status_t driver_init_mode(const char *UNUSED(name),
+status_t driver_init_mode(const char *name,
                           uint64_t UNUSED(domainid),
                           uint64_t UNUSED(init_flags),
                           vmi_init_data_t *UNUSED(init_data),
                           vmi_mode_t *mode)
 {
-
-    // /* if we didn't see exactly one system, report error */
-    // if (count == 0) {
-    //     errprint("Could not find a live guest VM or file to use.\n");
-    //     errprint("Opening a live guest VM requires root access.\n");
-    //     return VMI_FAILURE;
-    // } else if (count > 1) {
-    //     errprint
-    //     ("Found more than one VMM or file to use,\nplease specify what you want instead of using VMI_AUTO.\n");
-    //     return VMI_FAILURE;
-    // } else { // count == 1
-
-    // driver detection is not supported in libmicrovmi yet
-    // assume Xen for now
-    *mode = VMI_XEN;
+    const char* init_error = NULL;
+    void *driver = microvmi_init(name, NULL, NULL, &init_error);
+    if (!driver) {
+        errprint("%s\n", (char*)init_error);
+        rs_cstring_free((char*)init_error);
+        return VMI_FAILURE;
+    }
+    enum DriverType drv_type = microvmi_get_driver_type(driver);
+    switch (drv_type) {
+        case Xen:
+            *mode = VMI_XEN;
+            break;
+        case KVM:
+            *mode = VMI_KVM;
+            break;
+        default:
+            errprint("Driver is not officially supported by LibVMI");
+            microvmi_destroy(driver);
+            return VMI_FAILURE;
+    }
+    
+    microvmi_destroy(driver);
     return VMI_SUCCESS;
 }
 
@@ -115,11 +122,9 @@ status_t driver_init_vmi(vmi_instance_t vmi,
     const char *name = vmi->driver.name;
 
     const char* init_error = NULL;
-    // hardcode Xen
-    const DriverType drv_type = Xen;
-    void *driver = microvmi_init(name, &drv_type, NULL, &init_error);
+    void *driver = microvmi_init(name, NULL, NULL, &init_error);
     if (!driver) {
-        errprint((char*)init_error);
+        errprint("%s\n", (char*)init_error);
         rs_cstring_free((char*)init_error);
         return rc;
     }
