@@ -61,20 +61,63 @@ release_data(
         g_free(memory);
 }
 
+// helper
+static void*
+init_microvmi_driver(
+    const char *name,
+    vmi_init_data_t *init_data)
+{
+    DriverInitParamFFI *init_param = NULL;
+
+    if (!name) {
+        errprint("Missing vm name to initialize Microvmi driver");
+        return NULL;
+    }
+    if (init_data) {
+        // convert libvmi init data to microvmi
+        if (init_data->count >= 2) {
+            errprint("Multiple init_data values is not supported\n");
+            return NULL;
+        }
+
+        if (init_data->count == 1) {
+            if (init_data->entry->type != VMI_INIT_DATA_KVMI_SOCKET) {
+                errprint("Only VMI_INIT_DATA_KVMI_SOCKET is supported\n");
+                return NULL;
+            }
+            init_param = calloc(1, sizeof(DriverInitParamFFI));
+            if (!init_param) {
+                return NULL;
+            }
+            init_param->kv_mi_socket = init_data->entry[0].data;
+        }
+    }
+
+    // initialize libmicrovmi logger
+    microvmi_envlogger_init();
+
+    // init the driver
+    const char* init_error = NULL;
+    void *driver = microvmi_init(name, NULL, init_param, &init_error);
+    if (!driver) {
+        errprint("%s\n", (char*)init_error);
+        rs_cstring_free((char*)init_error);
+        if (init_param)
+            free(init_param);
+        return NULL;
+    }
+    if (init_param)
+        free(init_param);
+    return driver;
+}
 
 status_t driver_init_mode(const char *name,
                           uint64_t UNUSED(domainid),
                           uint64_t UNUSED(init_flags),
-                          vmi_init_data_t *UNUSED(init_data),
+                          vmi_init_data_t *init_data,
                           vmi_mode_t *mode)
 {
-    const char* init_error = NULL;
-    void *driver = microvmi_init(name, NULL, NULL, &init_error);
-    if (!driver) {
-        errprint("%s\n", (char*)init_error);
-        rs_cstring_free((char*)init_error);
-        return VMI_FAILURE;
-    }
+    void* driver = init_microvmi_driver(name, init_data);
     enum DriverType drv_type = microvmi_get_driver_type(driver);
     switch (drv_type) {
         case Xen:
@@ -112,22 +155,17 @@ status_t driver_init(vmi_instance_t vmi,
 
 status_t driver_init_vmi(vmi_instance_t vmi,
                          uint32_t UNUSED(init_flags),
-                         vmi_init_data_t *UNUSED(init_data))
+                         vmi_init_data_t *init_data)
 {
     status_t rc = VMI_FAILURE;
 
-    // initialize libmicrovmi logger
-    microvmi_envlogger_init();
     // initialize libmicrovmi
     const char *name = vmi->driver.name;
 
-    const char* init_error = NULL;
-    void *driver = microvmi_init(name, NULL, NULL, &init_error);
-    if (!driver) {
-        errprint("%s\n", (char*)init_error);
-        rs_cstring_free((char*)init_error);
-        return rc;
-    }
+    void* driver = init_microvmi_driver(name, init_data);
+    if (!driver)
+        return VMI_FAILURE;
+
 
     // (re)init cache
     memory_cache_destroy(vmi);
