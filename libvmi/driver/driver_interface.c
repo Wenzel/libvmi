@@ -28,80 +28,117 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <libmicrovmi.h>
+
 #include "private.h"
+#include "memory_cache.h"
 #include "driver/driver_interface.h"
 
-#ifdef ENABLE_FILE
-#include "driver/file/file.h"
-#endif
+// get data memory cache callback
+static void*
+get_data(vmi_instance_t vmi, addr_t paddr, uint32_t len)
+{
+    void *buffer = g_try_malloc0(len);
+    if (!buffer)
+        return NULL;
 
-#ifdef ENABLE_XEN
-#include "driver/xen/xen.h"
-#endif
+    void *driver = vmi->driver.microvmi_driver;
+    if (!microvmi_read_physical(driver, (uint64_t)paddr, buffer, (size_t)len)) {
+        g_free(buffer);
+        return NULL;
+    }
+    return buffer;
+}
 
-#ifdef ENABLE_KVM
-#include "driver/kvm/kvm.h"
-#endif
+// release data memory cache callback
+static void
+release_data(
+    vmi_instance_t UNUSED(vmi),
+    void *memory,
+    size_t UNUSED(length))
+{
+    if (memory)
+        g_free(memory);
+}
 
-#ifdef ENABLE_BAREFLANK
-#include "driver/bareflank/bareflank.h"
-#endif
+// helper
+static void*
+init_microvmi_driver(
+    const char *name,
+    vmi_init_data_t *init_data)
+{
+    DriverInitParamFFI *init_param = NULL;
+
+    if (!name) {
+        errprint("Missing vm name to initialize Microvmi driver");
+        return NULL;
+    }
+    if (init_data) {
+        // convert libvmi init data to microvmi
+        if (init_data->count >= 2) {
+            errprint("Multiple init_data values is not supported\n");
+            return NULL;
+        }
+
+        if (init_data->count == 1) {
+            if (init_data->entry->type != VMI_INIT_DATA_KVMI_SOCKET) {
+                errprint("Only VMI_INIT_DATA_KVMI_SOCKET is supported\n");
+                return NULL;
+            }
+            init_param = calloc(1, sizeof(DriverInitParamFFI));
+            if (!init_param) {
+                return NULL;
+            }
+            init_param->kv_mi_socket = init_data->entry[0].data;
+        }
+    }
+
+    // initialize libmicrovmi logger
+    microvmi_envlogger_init();
+
+    // init the driver
+    const char* init_error = NULL;
+    void *driver = microvmi_init(name, NULL, init_param, &init_error);
+    if (!driver) {
+        errprint("%s\n", (char*)init_error);
+        rs_cstring_free((char*)init_error);
+        if (init_param)
+            free(init_param);
+        return NULL;
+    }
+    if (init_param)
+        free(init_param);
+    return driver;
+}
 
 status_t driver_init_mode(const char *name,
-                          uint64_t domainid,
-                          uint64_t init_flags,
+                          uint64_t UNUSED(domainid),
+                          uint64_t UNUSED(init_flags),
                           vmi_init_data_t *init_data,
                           vmi_mode_t *mode)
 {
-    unsigned long count = 0;
-
-    /* see what systems are accessable */
-#ifdef ENABLE_XEN
-    if (VMI_SUCCESS == xen_test(domainid, name, init_flags, init_data)) {
-        dbprint(VMI_DEBUG_DRIVER, "--found Xen\n");
-        *mode = VMI_XEN;
-        count++;
+    void* driver = init_microvmi_driver(name, init_data);
+    enum DriverType drv_type = microvmi_get_driver_type(driver);
+    switch (drv_type) {
+        case Xen:
+            *mode = VMI_XEN;
+            break;
+        case KVM:
+            *mode = VMI_KVM;
+            break;
+        default:
+            errprint("Driver is not officially supported by LibVMI");
+            microvmi_destroy(driver);
+            return VMI_FAILURE;
     }
-#endif
-#ifdef ENABLE_KVM
-    if (VMI_SUCCESS == kvm_test(domainid, name, init_flags, init_data)) {
-        dbprint(VMI_DEBUG_DRIVER, "--found KVM\n");
-        *mode = VMI_KVM;
-        count++;
-    }
-#endif
-#ifdef ENABLE_FILE
-    if (VMI_SUCCESS == file_test(domainid, name, init_flags, init_data)) {
-        dbprint(VMI_DEBUG_DRIVER, "--found file\n");
-        *mode = VMI_FILE;
-        count++;
-    }
-#endif
-#ifdef ENABLE_BAREFLANK
-    if (VMI_SUCCESS == bareflank_test(domainid, name)) {
-        dbprint(VMI_DEBUG_DRIVER, "--found Bareflank\n");
-        *mode = VMI_BAREFLANK;
-        count++;
-    }
-#endif
-
-    /* if we didn't see exactly one system, report error */
-    if (count == 0) {
-        errprint("Could not find a live guest VM or file to use.\n");
-        errprint("Opening a live guest VM requires root access.\n");
-        return VMI_FAILURE;
-    } else if (count > 1) {
-        errprint
-        ("Found more than one VMM or file to use,\nplease specify what you want instead of using VMI_AUTO.\n");
-        return VMI_FAILURE;
-    } else { // count == 1
-        return VMI_SUCCESS;
-    }
+    
+    microvmi_destroy(driver);
+    return VMI_SUCCESS;
 }
 
 status_t driver_init(vmi_instance_t vmi,
-                     uint32_t init_flags,
-                     vmi_init_data_t *init_data)
+                     uint32_t UNUSED(init_flags),
+                     vmi_init_data_t *UNUSED(init_data))
 {
     status_t rc = VMI_FAILURE;
     if (vmi->driver.initialized) {
@@ -111,44 +148,31 @@ status_t driver_init(vmi_instance_t vmi,
 
     bzero(&vmi->driver, sizeof(driver_interface_t));
 
-    switch (vmi->mode) {
-#ifdef ENABLE_XEN
-        case VMI_XEN:
-            rc = driver_xen_setup(vmi);
-            break;
-#endif
-#ifdef ENABLE_KVM
-        case VMI_KVM:
-            rc = driver_kvm_setup(vmi);
-            break;
-#endif
-#ifdef ENABLE_FILE
-        case VMI_FILE:
-            rc = driver_file_setup(vmi);
-            break;
-#endif
-#ifdef ENABLE_BAREFLANK
-        case VMI_BAREFLANK:
-            rc = driver_bareflank_setup(vmi);
-            break;
-#endif
-        default:
-            break;
-    };
-
-    if (rc == VMI_SUCCESS && vmi->driver.init_ptr)
-        rc = vmi->driver.init_ptr(vmi, init_flags, init_data);
+    rc = VMI_SUCCESS;
 
     return rc;
 }
 
 status_t driver_init_vmi(vmi_instance_t vmi,
-                         uint32_t init_flags,
+                         uint32_t UNUSED(init_flags),
                          vmi_init_data_t *init_data)
 {
     status_t rc = VMI_FAILURE;
-    if (vmi->driver.init_vmi_ptr)
-        rc = vmi->driver.init_vmi_ptr(vmi, init_flags, init_data);
+
+    // initialize libmicrovmi
+    const char *name = vmi->driver.name;
+
+    void* driver = init_microvmi_driver(name, init_data);
+    if (!driver)
+        return VMI_FAILURE;
+
+
+    // (re)init cache
+    memory_cache_destroy(vmi);
+    memory_cache_init(vmi, get_data, release_data, 0);
+    vmi->driver.microvmi_driver = driver;
+    vmi->driver.initialized = true;
+    rc = VMI_SUCCESS;
 
     return rc;
 }

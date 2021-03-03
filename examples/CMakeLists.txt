@@ -1,3 +1,9 @@
+add_executable(pause-example pause-example.c)
+target_link_libraries(pause-example vmi_shared)
+
+add_executable(map-paddr map-paddr.c)
+target_link_libraries(map-paddr vmi_shared)
+
 add_executable(map-addr map-addr.c)
 target_link_libraries(map-addr vmi_shared)
 

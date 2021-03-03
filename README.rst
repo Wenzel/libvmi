@@ -47,6 +47,8 @@ The following libraries are used in building this code:
 
 - ``CMake`` (``>= 3.1``)
 
+- libmicrovmi_: Cross-platform, low-level VM introspection library
+
 - ``libtool`` Generic library support script
 
 - ``yacc`` OR ``bison`` (optional, for reading the configuration file)
@@ -62,6 +64,19 @@ The following libraries are used in building this code:
 Installing the dependencies on Ubuntu::
 
     $ sudo apt-get install cmake flex bison libglib2.0-dev libvirt-dev libjson-c-dev libyajl-dev
+
+
+
+libmicrovmi
+~~~~~~~~~~~
+
+LibVMI depends on libmicrovmi_ to talk to the hypervisor introspection API.
+
+Got to the libmicrovmi-release_ page to download the latest Debian package, install it.
+
+.. code::
+
+    sudo dpkg -i microvmi_x.x.x_amd64.deb
 
 Building
 --------
@@ -228,3 +243,8 @@ Example to enable selective output (XEN and CORE)
 Community
 ---------
 The LibVMI forums are available at https://groups.google.com/forum/#!forum/vmitools
+
+
+
+.. _libmicrovmi: https://github.com/Wenzel/libmicrovmi
+.. _libmicrovmi-release: https://github.com/Wenzel/libmicrovmi/releases

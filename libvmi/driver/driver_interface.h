@@ -28,6 +28,8 @@
 #ifndef DRIVER_INTERFACE_H
 #define DRIVER_INTERFACE_H
 
+#include <libmicrovmi.h>
+
 #include "private.h"
 
 typedef struct driver_interface {
@@ -202,6 +204,11 @@ typedef struct driver_interface {
 
     /* Set to true once driver is initialized. */
     bool initialized;
+
+    /* Microvmi driver */
+    void* microvmi_driver;
+
+    const char* name;
 
 } driver_interface_t;
 

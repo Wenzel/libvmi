@@ -28,7 +28,10 @@
 #ifndef DRIVER_WRAPPER_H
 #define DRIVER_WRAPPER_H
 
+#include <libmicrovmi.h>
+
 #include "private.h"
+#include "memory_cache.h"
 
 /*
  * The following functions are safety-wrappers that should be used internally
@@ -40,9 +43,11 @@ driver_destroy(
     vmi_instance_t vmi)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (vmi->driver.initialized && vmi->driver.destroy_ptr)
+    if (!vmi->driver.initialized)
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_destroy function not implemented.\n");
 #endif
-        vmi->driver.destroy_ptr(vmi);
+    if (vmi->driver.microvmi_driver)
+        microvmi_destroy(vmi->driver.microvmi_driver);
 
     bzero(&vmi->driver, sizeof(driver_interface_t));
 }
@@ -52,14 +57,8 @@ driver_get_id_from_name(
     vmi_instance_t vmi,
     const char *name)
 {
-#ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.get_id_from_name_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_get_id_from_name function not implemented.\n");
-        return 0;
-    }
-#endif
-
-    return vmi->driver.get_id_from_name_ptr(vmi, name);
+    vmi->driver.name = strndup(name, 500);
+    return 1;
 }
 
 static inline status_t
@@ -185,18 +184,14 @@ driver_get_xsave_info(
 
 static inline status_t
 driver_get_memsize(
-    vmi_instance_t vmi,
+    vmi_instance_t UNUSED(vmi),
     uint64_t *allocated_ram_size,
     addr_t *max_physical_address)
 {
-#ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.get_memsize_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_get_memsize function not implemented.\n");
-        return VMI_FAILURE;
-    }
-#endif
-
-    return vmi->driver.get_memsize_ptr(vmi, allocated_ram_size, max_physical_address);
+    // return fake data for now
+    *allocated_ram_size = 0x59700000;
+    *max_physical_address = 0x59700000;
+    return VMI_SUCCESS;
 }
 
 static inline status_t
@@ -260,13 +255,183 @@ driver_get_vcpureg(
     unsigned long vcpu)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.get_vcpureg_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_get_vcpureg function not implemented.\n");
+    if (!vmi->driver.initialized) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver is not initialized.\n");
         return VMI_FAILURE;
     }
 #endif
 
-    return vmi->driver.get_vcpureg_ptr(vmi, value, reg, vcpu);
+    void *driver = vmi->driver.microvmi_driver;
+    Registers regs;
+    if (!microvmi_read_registers(driver, (uint16_t)vcpu, &regs))
+        return VMI_FAILURE;
+
+    switch (reg) {
+        case RAX:
+            *value = (reg_t) regs.x86.rax;
+            break;
+        case RBX:
+            *value = (reg_t) regs.x86.rbx;
+            break;
+        case RCX:
+            *value = (reg_t) regs.x86.rcx;
+            break;
+        case RDX:
+            *value = (reg_t) regs.x86.rdx;
+            break;
+        case RBP:
+            *value = (reg_t) regs.x86.rbp;
+            break;
+        case RSI:
+            *value = (reg_t) regs.x86.rsi;
+            break;
+        case RDI:
+            *value = (reg_t) regs.x86.rdi;
+            break;
+        case RSP:
+            *value = (reg_t) regs.x86.rsp;
+            break;
+        case R8:
+            *value = (reg_t) regs.x86.r8;
+            break;
+        case R9:
+            *value = (reg_t) regs.x86.r9;
+            break;
+        case R10:
+            *value = (reg_t) regs.x86.r10;
+            break;
+        case R11:
+            *value = (reg_t) regs.x86.r11;
+            break;
+        case R12:
+            *value = (reg_t) regs.x86.r12;
+            break;
+        case R13:
+            *value = (reg_t) regs.x86.r13;
+            break;
+        case R14:
+            *value = (reg_t) regs.x86.r14;
+            break;
+        case R15:
+            *value = (reg_t) regs.x86.r15;
+            break;
+        case RIP:
+            *value = (reg_t) regs.x86.rip;
+            break;
+        case RFLAGS:
+            *value = (reg_t) regs.x86.rflags;
+            break;
+        case CR0:
+            *value = (reg_t) regs.x86.cr0;
+            break;
+        case CR2:
+            *value = (reg_t) regs.x86.cr2;
+            break;
+        case CR3:
+            *value = (reg_t) regs.x86.cr3;
+            break;
+        case CR4:
+            *value = (reg_t) regs.x86.cr4;
+            break;
+        case CS_SEL:
+            *value = (reg_t) regs.x86.cs.selector;
+            break;
+        case DS_SEL:
+            *value = (reg_t) regs.x86.ds.selector;
+            break;
+        case ES_SEL:
+            *value = (reg_t) regs.x86.es.selector;
+            break;
+        case FS_SEL:
+            *value = (reg_t) regs.x86.fs.selector;
+            break;
+        case GS_SEL:
+            *value = (reg_t) regs.x86.gs.selector;
+            break;
+        case SS_SEL:
+            *value = (reg_t) regs.x86.ss.selector;
+            break;
+        case TR_SEL:
+            *value = (reg_t) regs.x86.tr.selector;
+            break;
+        case CS_LIMIT:
+            *value = (reg_t) regs.x86.cs.limit;
+            break;
+        case DS_LIMIT:
+            *value = (reg_t) regs.x86.ds.limit;
+            break;
+        case ES_LIMIT:
+            *value = (reg_t) regs.x86.es.limit;
+            break;
+        case FS_LIMIT:
+            *value = (reg_t) regs.x86.fs.limit;
+            break;
+        case GS_LIMIT:
+            *value = (reg_t) regs.x86.gs.limit;
+            break;
+        case SS_LIMIT:
+            *value = (reg_t) regs.x86.ss.limit;
+            break;
+        case TR_LIMIT:
+            *value = (reg_t) regs.x86.tr.limit;
+            break;
+        case CS_BASE:
+            *value = (reg_t) regs.x86.cs.base;
+            break;
+        case DS_BASE:
+            *value = (reg_t) regs.x86.ds.base;
+            break;
+        case ES_BASE:
+            *value = (reg_t) regs.x86.es.base;
+            break;
+        case FS_BASE:
+            *value = (reg_t) regs.x86.fs.base;
+            break;
+        case GS_BASE:
+            *value = (reg_t) regs.x86.gs.base;
+            break;
+        case SS_BASE:
+            *value = (reg_t) regs.x86.ss.base;
+            break;
+        case TR_BASE:
+            *value = (reg_t) regs.x86.tr.base;
+            break;
+        case SYSENTER_CS:
+            *value = (reg_t) regs.x86.sysenter_cs;
+            break;
+        case SYSENTER_ESP:
+            *value = (reg_t) regs.x86.sysenter_esp;
+            break;
+        case SYSENTER_EIP:
+            *value = (reg_t) regs.x86.sysenter_eip;
+            break;
+        case MSR_LSTAR:
+            *value = (reg_t) regs.x86.msr_lstar;
+            break;
+        case MSR_EFER:
+            *value = (reg_t) regs.x86.msr_efer;
+            break;
+        case MSR_STAR:
+            *value = (reg_t) regs.x86.msr_star;
+            break;
+        case IDTR_BASE:
+            *value = (reg_t) regs.x86.idt.base;
+            break;
+        case IDTR_LIMIT:
+            *value = (reg_t) regs.x86.idt.limit;
+            break;
+        case GDTR_BASE:
+            *value = (reg_t) regs.x86.gdt.base;
+            break;
+        case GDTR_LIMIT:
+            *value = (reg_t) regs.x86.gdt.limit;
+            break;
+        default:
+            errprint("Unimplemented register %ld\n", reg);
+            return VMI_FAILURE;
+    }
+
+    return VMI_SUCCESS;
 }
 
 static inline status_t
@@ -324,13 +489,14 @@ driver_read_page(
     addr_t page)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.read_page_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_read_page function not implemented.\n");
+    if (!vmi->driver.initialized) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver is not initialized\n");
         return NULL;
     }
 #endif
 
-    return vmi->driver.read_page_ptr(vmi, page);
+    addr_t paddr = page << vmi->page_shift;
+    return memory_cache_insert(vmi, paddr);
 }
 
 static inline void *
@@ -385,13 +551,16 @@ driver_pause_vm(
     vmi_instance_t vmi)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.pause_vm_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_pause_vm function not implemented.\n");
+    if (!vmi->driver.initialized) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver not initialized\n");
         return VMI_FAILURE;
     }
 #endif
 
-    return vmi->driver.pause_vm_ptr(vmi);
+    void* driver = vmi->driver.microvmi_driver;
+    if (!microvmi_pause(driver))
+        return VMI_FAILURE;
+    return VMI_SUCCESS;
 }
 
 static inline status_t
@@ -399,13 +568,16 @@ driver_resume_vm(
     vmi_instance_t vmi)
 {
 #ifdef ENABLE_SAFETY_CHECKS
-    if (!vmi->driver.initialized || !vmi->driver.resume_vm_ptr) {
-        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_resume_vm function not implemented.\n");
+    if (!vmi->driver.initialized) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver not initialized\n");
         return VMI_FAILURE;
     }
 #endif
 
-    return vmi->driver.resume_vm_ptr(vmi);
+    void* driver = vmi->driver.microvmi_driver;
+    if (microvmi_resume(driver))
+        return VMI_FAILURE;
+    return VMI_SUCCESS;
 }
 
 static inline status_t
