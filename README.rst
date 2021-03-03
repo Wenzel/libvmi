@@ -72,28 +72,11 @@ libmicrovmi
 
 LibVMI depends on libmicrovmi_ to talk to the hypervisor introspection API.
 
-First you need a ``Rust`` toolchain: rustup_ 
+Got to the libmicrovmi-release_ page to download the latest Debian package, install it.
 
-Then you can build and install ``libmicrovmi``:
+.. code::
 
-.. code:: bash
-
-   git clone https://github.com/Wenzel/libmicrovmi
-   cd libmicrovmi
-   cargo build --features xen
-   # install the libmicrovmi library
-   sudo cp target/debug/libmicrovmi.so /usr/local/lib
-   # generate and install the header
-   cd c_examples
-   cargo install --force cbindgen
-   make
-   sudo cp libmicrovmi.h /usr/local/include
-
-Note: this experimental LibVMI build is hardcoded to use Xen.
-To use a different hypervisor:
-
-1. rebuild ``libmicrovmi`` with the driver of your choice. (``cargo build --features {xen/kvm/virtualbox}``)
-2. adapt ``libvmi/driver/driver_interface.c`` ``driver_init_mode()`` and ``driver_init_vmi()`` functions 
+    sudo dpkg -i microvmi_x.x.x_amd64.deb
 
 Building
 --------
@@ -262,5 +245,6 @@ Community
 The LibVMI forums are available at https://groups.google.com/forum/#!forum/vmitools
 
 
+
 .. _libmicrovmi: https://github.com/Wenzel/libmicrovmi
-.. _rustup: https://rustup.rs/
+.. _libmicrovmi-release: https://github.com/Wenzel/libmicrovmi/releases
