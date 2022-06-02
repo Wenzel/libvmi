@@ -170,10 +170,6 @@ process_cb_response(
         errprint("%s: invalid kvm or kvmi handles\n", __func__);
         return VMI_FAILURE;
     }
-    // Note: libvmi_event can be NULL
-    // this indicates that we are shutting down libvmi, and that vmi_events_listen(0) has been called
-    // to process the rest of the events in the queue.
-    // the libvmi event has already been cleared at this point.
     if (!kvmi_event || !rpl) {
         errprint("%s: invalid kvmi/rpl handles\n", __func__);
         return VMI_FAILURE;
@@ -231,10 +227,12 @@ call_event_callback(
     vmi_instance_t vmi,
     vmi_event_t *libvmi_event)
 {
-    event_response_t response;
-    vmi->event_callback = 1;
-    response = libvmi_event->callback(vmi, libvmi_event);
-    vmi->event_callback = 0;
+    event_response_t response = VMI_EVENT_RESPONSE_NONE;
+    if (!vmi->shutting_down) {
+        vmi->event_callback = 1;
+        response = libvmi_event->callback(vmi, libvmi_event);
+        vmi->event_callback = 0;
+    }
     return response;
 }
 
@@ -878,7 +876,7 @@ kvm_events_destroy(
     // clean event queue
     if (kvm_are_events_pending(vmi)) {
         dbprint(VMI_DEBUG_KVM, "--Cleanup event queue\n");
-        if (VMI_FAILURE == kvm_events_listen(vmi, 0))
+        if (VMI_FAILURE == kvm_process_events_with_timeout(vmi, 0))
             errprint("--Failed to clean event queue\n");
     }
 
@@ -920,13 +918,8 @@ process_single_event(vmi_instance_t vmi, struct kvmi_dom_event **event)
         goto cleanup;
     }
 #endif
-    if (!vmi->shutting_down) {
-        // call handler
-        if (VMI_FAILURE == kvm->process_event[ev_reason](vmi, (*event))) {
-            status = VMI_FAILURE;
-            goto cleanup;
-        }
-    }
+    // call handler
+    status = kvm->process_event[ev_reason](vmi, (*event));
 
 cleanup:
     free((*event));
@@ -989,6 +982,9 @@ kvm_events_listen(
     if (timeout > INT_MAX)
         return VMI_FAILURE;
 #endif
+
+    if (vmi->shutting_down)
+        return VMI_SUCCESS;
 
     GSList *loop;
 
