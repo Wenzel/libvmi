@@ -876,7 +876,7 @@ kvm_events_destroy(
     // clean event queue
     if (kvm_are_events_pending(vmi)) {
         dbprint(VMI_DEBUG_KVM, "--Cleanup event queue\n");
-        if (VMI_FAILURE == kvm_process_events_with_timeout(vmi, 0))
+        if (VMI_FAILURE == vmi_events_listen(vmi, 0))
             errprint("--Failed to clean event queue\n");
     }
 
@@ -982,9 +982,6 @@ kvm_events_listen(
     if (timeout > INT_MAX)
         return VMI_FAILURE;
 #endif
-
-    if (vmi->shutting_down)
-        return VMI_SUCCESS;
 
     GSList *loop;
 
