@@ -30,6 +30,7 @@ set_package_properties(PkgConfig PROPERTIES
     PURPOSE "Find and configure multiple LibVMI dependencies")
 pkg_search_module(GLIB REQUIRED glib-2.0)
 pkg_search_module(ZLIB REQUIRED zlib)
+find_package(Libmicrovmi REQUIRED)
 
 include(DetectArchitecture)
 include(StaticAnalysis)

@@ -24,6 +24,7 @@ set(libvmi_src
 add_library(vmi OBJECT ${libvmi_src})
 # force -fPIC
 set_property(TARGET vmi PROPERTY POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vmi PRIVATE ${Libmicrovmi_INCLUDE_DIRS})
 
 set(VMI_PUBLIC_HEADERS
     libvmi.h
@@ -39,6 +40,9 @@ add_library (vmi_shared SHARED $<TARGET_OBJECTS:vmi>)
 # one libvmi_extra.h function returns a GSList*
 target_link_libraries(vmi_shared PUBLIC ${GLIB_LIBRARIES})
 list(APPEND VMI_PUBLIC_DEPS ${GLIB_LIBRARIES})
+# hypervisor access goes through libmicrovmi
+target_link_libraries(vmi_shared PRIVATE ${Libmicrovmi_LIBRARIES})
+list(APPEND VMI_PUBLIC_DEPS microvmi)
 set_target_properties(vmi_shared PROPERTIES OUTPUT_NAME "vmi")
 # set soname
 set_target_properties(vmi_shared PROPERTIES
