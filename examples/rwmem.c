@@ -26,7 +26,6 @@ static bool setup_vmi(vmi_instance_t *vmi, char* domain, uint64_t domid, char* j
 
     uint64_t options = (init_events ? VMI_INIT_EVENTS : 0) |
                        (domain ? VMI_INIT_DOMAINNAME : VMI_INIT_DOMAINID);
-    vmi_mode_t mode = kvmi ? VMI_KVM : VMI_XEN;
     const void *d = domain ?: (void*)&domid;
 
     vmi_init_data_t *data = NULL;
@@ -37,7 +36,10 @@ static bool setup_vmi(vmi_instance_t *vmi, char* domain, uint64_t domid, char* j
         data->entry[0].data = kvmi;
     }
 
-    status_t status = vmi_init(vmi, mode, d, options, data, NULL);
+    vmi_mode_t mode;
+    status_t status = vmi_get_access_mode(NULL, d, options, data, &mode);
+    if ( VMI_SUCCESS == status )
+        status = vmi_init(vmi, mode, d, options, data, NULL);
 
     free(data);
 
@@ -99,7 +101,7 @@ static void do_list_pages(addr_t pagetable)
 static void usage(void)
 {
     printf("Usage:\n");
-    printf("\t --domid <domid>\n");
+    printf("\t --name <domain name> | --domid <domid>\n");
     printf("\t --read <address>\n");
     printf("\t --write <address>\n");
     printf("\t --file <input/output file>\n");
@@ -117,6 +119,7 @@ int main(int argc, char** argv)
     int c, long_index = 0;
     const struct option long_opts[] = {
         {"help", no_argument, NULL, 'h'},
+        {"name", required_argument, NULL, 'n'},
         {"domid", required_argument, NULL, 'd'},
         {"read", required_argument, NULL, 'r'},
         {"write", required_argument, NULL, 'w'},
@@ -127,16 +130,20 @@ int main(int argc, char** argv)
         {"list-pages", no_argument, NULL, 'l'},
         {NULL, 0, NULL, 0}
     };
-    const char* opts = "d:j:r:w:L:f:p:k:l";
+    const char* opts = "n:d:j:r:w:L:f:p:k:l";
     bool read = false, write = false, list_pages = false;
     size_t limit = 0;
     addr_t address = 0;
     char *filepath = NULL;
     char *kvmi = NULL;
+    char *name = NULL;
     uint32_t domid = 0;
 
     while ((c = getopt_long (argc, argv, opts, long_opts, &long_index)) != -1) {
         switch (c) {
+            case 'n':
+                name = optarg;
+                break;
             case 'd':
                 domid = strtoul(optarg, NULL, 0);
                 break;
@@ -170,12 +177,12 @@ int main(int argc, char** argv)
         };
     }
 
-    if ( !domid || (!read && !write && !list_pages) || (read && write) || (!list_pages && (!limit || !filepath)) ) {
+    if ( (!domid && !name) || (!read && !write && !list_pages) || (read && write) || (!list_pages && (!limit || !filepath)) ) {
         usage();
         return -1;
     }
 
-    if ( !setup_vmi(&vmi, NULL, domid, NULL, kvmi, false, true) )
+    if ( !setup_vmi(&vmi, name, domid, NULL, kvmi, false, true) )
         return -1;
 
     ACCESS_CONTEXT(ctx,
