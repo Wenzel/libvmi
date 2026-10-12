@@ -1,0 +1,44 @@
+name: build
+on:
+  push:
+  pull_request:
+
+env:
+  # libmicrovmi commit LibVMI builds against: Wenzel/libmicrovmi#323 (default VirtualBox access
+  # method, microvmi_get_vcpu_count), merged into dev
+  LIBMICROVMI_REV: df0f1c7598d204bec61fc29e5dfc8d3c99070290
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y build-essential clang cmake pkg-config flex bison libglib2.0-dev libjson-c-dev libfuse-dev zlib1g-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.99.0
+
+      - name: Build and install libmicrovmi
+        run: |
+          git clone https://github.com/Wenzel/libmicrovmi /tmp/libmicrovmi
+          cd /tmp/libmicrovmi
+          git checkout "$LIBMICROVMI_REV"
+          cargo build --release --features virtualbox
+          sudo install -m 644 target/release/capi/libmicrovmi.h /usr/local/include/
+          sudo install -m 755 target/release/libmicrovmi.so /usr/local/lib/
+          sudo ldconfig
+
+      - name: Build LibVMI and the examples
+        env:
+          CC: ${{ matrix.compiler }}
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DBUILD_EXAMPLES=ON
+          cmake --build build -j "$(nproc)"

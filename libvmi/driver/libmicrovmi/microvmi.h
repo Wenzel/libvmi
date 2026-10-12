@@ -18,11 +18,19 @@
  * along with LibVMI.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef XS_EVENTS_H
-#define XS_EVENTS_H
+#ifndef MICROVMI_DRIVER_H
+#define MICROVMI_DRIVER_H
 
-#define XS_EVENT_REASON_UNKNOWN                 0
-#define XS_EVENT_REASON_DOMAIN_WATCH            1
-#define __XS_EVENT_REASON_MAX                   2
+#include "private.h"
 
-#endif
+/* open the VM with libmicrovmi and report which LibVMI mode it maps to */
+status_t libmicrovmi_test(
+    const char *name,
+    vmi_init_data_t *init_data,
+    vmi_mode_t *mode);
+
+/* fill vmi->driver with the libmicrovmi driver */
+status_t driver_libmicrovmi_setup(
+    vmi_instance_t vmi);
+
+#endif /* MICROVMI_DRIVER_H */

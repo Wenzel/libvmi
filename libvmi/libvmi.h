@@ -71,7 +71,11 @@ typedef enum vmi_mode {
 
     VMI_FILE, /**< libvmi is viewing a file on disk */
 
-    VMI_BAREFLANK /** <libvmi is monitoring a Bareflank VM */
+    VMI_BAREFLANK, /** <libvmi is monitoring a Bareflank VM */
+
+    VMI_VIRTUALBOX, /**< libvmi is monitoring a VirtualBox VM */
+
+    VMI_MEMFLOW /**< libvmi is monitoring a memflow target */
 } vmi_mode_t;
 
 typedef enum vmi_config {
@@ -225,8 +229,29 @@ typedef enum {
 
     VMI_INIT_DATA_MEMMAP,    /**< memory_map_t pointer */
 
-    VMI_INIT_DATA_KVMI_SOCKET     /**< kvmi socket path */
+    VMI_INIT_DATA_KVMI_SOCKET,    /**< kvmi socket path */
+
+    VMI_INIT_DATA_VBOX_ACCESS_METHOD, /**< VirtualBox access method: a vmi_vbox_access_method_t
+                                           cast to the data pointer, (void *)(uintptr_t)method */
+
+    VMI_INIT_DATA_VBOX_SOCKET     /**< VBoxVMI socket path (char *), used with
+                                       VMI_VBOX_ACCESS_METHOD_VBOXVMI */
 } vmi_init_data_type_t;
+
+/**
+ * VirtualBox access methods for VMI_INIT_DATA_VBOX_ACCESS_METHOD.
+ *
+ * Without VMI_INIT_DATA_VBOX_ACCESS_METHOD, libmicrovmi uses the VBoxVMI
+ * method at the VM's default socket and falls back to the MachineDebugger
+ * method only when that socket does not exist. An explicit method never
+ * falls back. VMI_VBOX_ACCESS_METHOD_VBOXVMI without VMI_INIT_DATA_VBOX_SOCKET
+ * uses the VM's default socket.
+ */
+typedef enum {
+    VMI_VBOX_ACCESS_METHOD_MACHINE_DEBUGGER = 1, /**< VirtualBox IMachineDebugger API */
+
+    VMI_VBOX_ACCESS_METHOD_VBOXVMI = 2           /**< VBoxVMI unix socket */
+} vmi_vbox_access_method_t;
 
 /**
  * Structures used to pass initialization data to LibVMI
@@ -2237,7 +2262,7 @@ uint64_t vmi_get_vmid(
 /**
  * Gets the current access mode for LibVMI, which tells what
  * resource is being using to access the memory (e.g., VMI_XEN,
- * VMI_KVM, or VMI_FILE).
+ * VMI_KVM, VMI_VIRTUALBOX or VMI_MEMFLOW).
  *
  * If LibVMI is already initialized it will return the active
  * mode. If the LibVMI instance passed is NULL, it will

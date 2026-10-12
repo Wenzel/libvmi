@@ -54,38 +54,6 @@ void sigint_handler(int signum)
     interrupted = 1;
 }
 
-static int bareflank_setup(vmi_init_data_t **init_data_ptr, memory_map_t **memmap_ptr)
-{
-    printf("Using this example on Bareflank is not safe.\n");
-    printf("You have to adjust it to match your machine before running it.\n");
-    return 1;
-
-    /* The following is an example based on the e820 map described in
-     * notes/memory_map.txt. */
-    uint32_t e820_entries = 5;
-
-    memory_map_t *memmap = malloc(sizeof(memory_map_t) + sizeof(addr_t) * 2 * e820_entries);
-    memmap->count = e820_entries;
-    memmap->range[0][0] = 0xfff;
-    memmap->range[0][1] = 0x57fff;
-    memmap->range[1][0] = 0x60000;
-    memmap->range[1][1] = 0x97fff;
-    memmap->range[2][0] = 0x100000;
-    memmap->range[2][1] = 0xdbfb8fff;
-    memmap->range[3][0] = 0xdcfff000;
-    memmap->range[3][1] = 0xdcffffff;
-    memmap->range[4][0] = 0x100000000;
-    memmap->range[4][1] = 0x21e5fffff;
-
-    vmi_init_data_t *init_data = malloc(sizeof(vmi_init_data_t) + sizeof(vmi_init_data_entry_t));
-    init_data->count = 1;
-    init_data->entry[0].type = VMI_INIT_DATA_MEMMAP;
-    init_data->entry[0].data = memmap;
-    *init_data_ptr = init_data;
-    *memmap_ptr = memmap;
-    return 0;
-}
-
 static void usage(const char *argv0)
 {
     printf("Usage: %s [options] domain output_file\n", argv0);
@@ -109,7 +77,6 @@ int main(int argc, char **argv)
 {
     int c;
     int retcode = 1;
-    memory_map_t *memmap = NULL;
     vmi_init_data_t *init_data = NULL;
     while ((c = getopt_long(argc, argv, "psk:h", long_opts, NULL)) != -1) {
         switch (c) {
@@ -153,11 +120,6 @@ int main(int argc, char **argv)
 
     vmi_mode_t mode;
     if (VMI_FAILURE == vmi_get_access_mode(NULL, name, VMI_INIT_DOMAINNAME, init_data, &mode) ) {
-        goto free_setup_info;
-    }
-
-    /* for bareflank we have to pass-in the actual memory map of the machine. */
-    if (mode == VMI_BAREFLANK && bareflank_setup(&init_data, &memmap) != 0) {
         goto free_setup_info;
     }
 
@@ -237,7 +199,6 @@ destroy_vmi:
     vmi_destroy(vmi);
 
 free_setup_info:
-    free(memmap);
     if (init_data) {
         free(init_data->entry[0].data);
         free(init_data);
