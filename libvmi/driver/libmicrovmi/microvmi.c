@@ -69,6 +69,22 @@ microvmi_open(
                     params.kvm.tag = UnixSocket;
                     params.kvm.unix_socket.path = (char *) init_data->entry[i].data;
                     break;
+                case VMI_INIT_DATA_VBOX_ACCESS_METHOD:
+                    switch ((uintptr_t) init_data->entry[i].data) {
+                        case VMI_VBOX_ACCESS_METHOD_MACHINE_DEBUGGER:
+                            params.virtualbox.access_method = VBOX_ACCESS_METHOD_MACHINE_DEBUGGER;
+                            break;
+                        case VMI_VBOX_ACCESS_METHOD_VBOXVMI:
+                            params.virtualbox.access_method = VBOX_ACCESS_METHOD_VBOXVMI;
+                            break;
+                        default:
+                            errprint("Unknown VirtualBox access method %"PRIuPTR"\n", (uintptr_t) init_data->entry[i].data);
+                            return VMI_FAILURE;
+                    }
+                    break;
+                case VMI_INIT_DATA_VBOX_SOCKET:
+                    params.virtualbox.socket_path = (char *) init_data->entry[i].data;
+                    break;
                 default:
                     break;
             }
