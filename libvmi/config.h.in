@@ -19,20 +19,11 @@
 /* Enable libvmi.conf */
 #cmakedefine ENABLE_CONFIGFILE
 
-/* Define to enable file support. */
-#cmakedefine ENABLE_FILE
-
 /* Define to FreeBSD support. */
 #cmakedefine ENABLE_FREEBSD
 
 /* Define to OSX support. */
 #cmakedefine ENABLE_OSX
-
-/* Define to enable KVM support. */
-#cmakedefine ENABLE_KVM
-
-/* Define to enable KVM legacy driver support */
-#cmakedefine ENABLE_KVM_LEGACY
 
 /* Define to Linux support. */
 #cmakedefine ENABLE_LINUX
@@ -45,30 +36,6 @@
 
 /* Define to Windows support. */
 #cmakedefine ENABLE_WINDOWS
-
-/* Define to enable Xen support. */
-#cmakedefine ENABLE_XEN
-
-/* Define to enable Bareflank support. */
-#cmakedefine ENABLE_BAREFLANK
-
-/* Define if you have <qemu/libvmi_request.h>. */
-#cmakedefine HAVE_LIBVMI_REQUEST
-
-/* Define if we have Xenstore support. */
-#cmakedefine HAVE_LIBXENSTORE
-
-/* Define if you have the <xenstore.h> header file. */
-#cmakedefine HAVE_XENSTORE_H
-
-/* Define if you have the <xs.h> header file. */
-#cmakedefine HAVE_XS_H
-
-/* xen headers define hvmmem_access_t */
-#cmakedefine HAVE_HVMMEM_ACCESS_T
-
-/* xen headers define xenmem_access_t */
-#cmakedefine HAVE_XENMEM_ACCESS_T
 
 /* Max number of pages held in page cache */
 #cmakedefine MAX_PAGE_CACHE_SIZE ${MAX_PAGE_CACHE_SIZE}

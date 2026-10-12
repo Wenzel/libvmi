@@ -29,6 +29,7 @@ target_include_directories(vmi PRIVATE ${Libmicrovmi_INCLUDE_DIRS})
 set(VMI_PUBLIC_HEADERS
     libvmi.h
     libvmi_extra.h
+    events.h
     slat.h
     x86.h)
 
@@ -120,71 +121,7 @@ if (ENABLE_CONFIGFILE)
     endif ()
 endif ()
 
-if (ENABLE_KVM)
-    # common dependencies
-    find_package(Libvirt)
-    if (NOT Libvirt_FOUND)
-        set(ENABLE_KVM OFF CACHE BOOL "Build KVM driver" FORCE)
-        message(WARNING "Cannot find libvirt: disabling KVM driver")
-    else ()
-        if (ENABLE_KVM_LEGACY)
-            # legacy KVM driver
-            target_link_libraries(vmi_shared PRIVATE m)
-            find_package(JSON-C)
-            set_package_properties(JSON-C PROPERTIES
-                PURPOSE "Dependency for KVM driver")
-            if (NOT JSON-C_FOUND)
-                set(ENABLE_KVM OFF CACHE BOOL "Build KVM driver" FORCE)
-                message(WARNING "Cannot find JSON: disabling KVM driver")
-            else ()
-                find_package(LibvmiRequest)
-            endif ()
-        else ()
-            # KVM driver based on KVMi series, API is exposed via libkvmi
-            pkg_search_module(Libkvmi libkvmi)
-            if (NOT Libkvmi_FOUND)
-                set(ENABLE_KVM OFF CACHE BOOL "Build KVM driver" FORCE)
-                message(WARNING "Cannot find libkvmi: disabling KVM driver")
-            else ()
-                message("Found libkvmi headers: ${Libkvmi_INCLUDE_DIRS}")
-                target_include_directories(vmi_shared PRIVATE ${Libkvmi_INCLUDE_DIRS})
-            endif ()
-        endif ()
-        target_include_directories(vmi_shared PUBLIC ${JSON-C_INCLUDE_DIRS})
-        # CMAKE_DL_LIBS -> dlopen* lib
-        target_link_libraries(vmi_shared PRIVATE ${CMAKE_DL_LIBS})
-        target_link_libraries(vmi_shared PUBLIC ${JSON-C_LIBRARIES})
-        list(APPEND VMI_PUBLIC_HEADERS events.h)
-        list(APPEND VMI_PUBLIC_DEPS ${JSON-C_LIBRARIES})
-    endif ()
-endif ()
-
-
-if (ENABLE_BAREFLANK)
-    find_package(JSON-C)
-    set_package_properties(JSON-C PROPERTIES
-        PURPOSE "Dependency for Bareflank driver")
-    if (NOT JSON-C_FOUND)
-        set(ENABLE_BAREFLANK OFF CACHE BOOL "Build Bareflank driver" FORCE)
-        message(WARNING "Cannot find JSON: disabling Bareflank driver")
-    else ()
-        target_include_directories(vmi_shared PUBLIC ${JSON-C_INCLUDE_DIRS})
-        target_link_libraries(vmi_shared PUBLIC ${JSON-C_LIBRARIES})
-        list(APPEND VMI_PUBLIC_DEPS ${JSON-C_LIBRARIES})
-    endif ()
-endif ()
-
-add_subdirectory(driver)
 add_subdirectory(os)
-
-
-if (ENABLE_XEN)
-    find_package(Xen REQUIRED)
-    list(APPEND VMI_PUBLIC_HEADERS events.h)
-    # CMAKE_DL_LIBS -> dlopen* lib
-    target_link_libraries(vmi_shared PRIVATE ${CMAKE_DL_LIBS})
-endif ()
-
 if (ENABLE_WINDOWS)
     list(APPEND VMI_PUBLIC_HEADERS peparse.h)
 endif ()
