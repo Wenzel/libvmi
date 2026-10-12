@@ -17,6 +17,7 @@ set(libvmi_src
     arch/ept.c
     driver/driver_interface.c
     driver/memory_cache.c
+    driver/libmicrovmi/microvmi.c
     os/os_interface.c
     disk/vbd.c
 )

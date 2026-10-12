@@ -30,15 +30,15 @@
 
 #include "private.h"
 #include "driver/driver_interface.h"
+#include "driver/libmicrovmi/microvmi.h"
 
-status_t driver_init_mode(const char *UNUSED(name),
+status_t driver_init_mode(const char *name,
                           uint64_t UNUSED(domainid),
                           uint64_t UNUSED(init_flags),
-                          vmi_init_data_t *UNUSED(init_data),
-                          vmi_mode_t *UNUSED(mode))
+                          vmi_init_data_t *init_data,
+                          vmi_mode_t *mode)
 {
-    errprint("No hypervisor driver available.\n");
-    return VMI_FAILURE;
+    return libmicrovmi_test(name, init_data, mode);
 }
 
 status_t driver_init(vmi_instance_t vmi,
@@ -52,6 +52,7 @@ status_t driver_init(vmi_instance_t vmi,
     }
 
     bzero(&vmi->driver, sizeof(driver_interface_t));
+    rc = driver_libmicrovmi_setup(vmi);
 
     if (rc == VMI_SUCCESS && vmi->driver.init_ptr)
         rc = vmi->driver.init_ptr(vmi, init_flags, init_data);

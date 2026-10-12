@@ -582,6 +582,9 @@ vmi_get_access_mode(
 static inline status_t driver_sanity_check(vmi_mode_t mode)
 {
     switch ( mode ) {
+        case VMI_XEN:
+        case VMI_KVM:
+            return VMI_SUCCESS;
         case VMI_FILE:
         case VMI_BAREFLANK:
             errprint("LibVMI mode %d is not supported by libmicrovmi\n", mode);
@@ -589,8 +592,6 @@ static inline status_t driver_sanity_check(vmi_mode_t mode)
         default:
             return VMI_FAILURE;
     };
-
-    return VMI_SUCCESS;
 }
 
 status_t vmi_init(

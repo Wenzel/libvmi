@@ -302,6 +302,7 @@ void memory_cache_remove(
 {
     if (paddr == vmi->last_used_page_key && vmi->last_used_page) {
         vmi->release_data_callback(vmi, vmi->last_used_page, vmi->page_size);
+        vmi->last_used_page = NULL;
     }
 }
 
