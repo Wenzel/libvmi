@@ -4,19 +4,17 @@ LibVMI: Simplified Virtual Machine Introspection
 LibVMI is a virtual machine introspection library.  This means that it helps
 you access the memory of a running virtual machine.  LibVMI provides primitives
 for accessing this memory using physical or virtual addresses and kernel
-symbols.  LibVMI also supports accessing memory from a physical memory snapshot,
-which is helpful for debugging or forensic analysis.
+symbols.
 
-In addition to memory access, LibVMI supports memory events.  Events provide
-notifications when registered regions of memory are executed, written to, or
-read.  Memory events require hypervisor support and are currently only
-available with Xen.
+This branch of LibVMI talks to the hypervisor through libmicrovmi_ instead of
+its own drivers: Xen, KVM, VirtualBox and memflow guests are reached through
+the matching libmicrovmi driver (``VMI_XEN``, ``VMI_KVM``, ``VMI_VIRTUALBOX``,
+``VMI_MEMFLOW`` modes). Memory snapshot files (``VMI_FILE``), Bareflank and
+VMI events are not supported. LibVMI can provide access to physical memory for
+any operating system, and access to virtual memory and kernel symbols from
+Windows and Linux.
 
-LibVMI is designed to run on Linux (file, Xen, or KVM access) or Mac OS X
-(file access only).  The most used platform is Linux + Xen, but the
-others are well tested and worth exploring as well.  LibVMI can provide access
-to physical memory for any operating system, and access to virtual memory and
-kernel symbols from Windows and Linux.
+.. _libmicrovmi: https://github.com/Wenzel/libmicrovmi
 
 If you would like higher level semantic information, then we suggest using the
 LibVMI Python bindings and Volatility.  Volatility
@@ -35,8 +33,8 @@ documentation online at https://libvmi.com.
    :alt: Join the chat at https://gitter.im/libvmi/Lobby
    :target: https://gitter.im/libvmi/Lobby?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
 
-.. image:: https://github.com/libvmi/libvmi/actions/workflows/compile.yml/badge.svg
-    :target: https://github.com/libvmi/libvmi/actions/workflows/compile.yml
+.. image:: https://github.com/Wenzel/libvmi/actions/workflows/build.yml/badge.svg?branch=libmicrovmi
+    :target: https://github.com/Wenzel/libvmi/actions/workflows/build.yml
 
 .. image:: https://scan.coverity.com/projects/14159/badge.svg
     :target: https://scan.coverity.com/projects/libvmi-libvmi
@@ -47,7 +45,7 @@ The following libraries are used in building this code:
 
 - ``CMake`` (``>= 3.1``)
 
-- ``libtool`` Generic library support script
+- libmicrovmi_ (see below)
 
 - ``yacc`` OR ``bison`` (optional, for reading the configuration file)
 
@@ -55,13 +53,32 @@ The following libraries are used in building this code:
 
 - ``glib`` (``>= 2.22``)
 
-- ``libvirt`` (``>= 0.8.7``)
-
-- ``libjson-c``
+- ``libjson-c`` (optional, for JSON profiles)
 
 Installing the dependencies on Ubuntu::
 
-    $ sudo apt-get install cmake flex bison libglib2.0-dev libvirt-dev libjson-c-dev libyajl-dev
+    $ sudo apt-get install cmake flex bison libglib2.0-dev libjson-c-dev
+
+libmicrovmi
+~~~~~~~~~~~
+LibVMI needs libmicrovmi's ``dev`` branch at the commit CI pins
+(``LIBMICROVMI_REV`` in ``.github/workflows/build.yml``), built from source with
+the VirtualBox driver (add ``xen``, ``kvm`` or ``mflow`` to ``--features`` for
+the other drivers) and a Rust toolchain:
+
+.. code::
+
+   git clone https://github.com/Wenzel/libmicrovmi
+   cd libmicrovmi
+   git checkout <LIBMICROVMI_REV>
+   cargo build --release --features virtualbox
+   sudo install -m 644 target/release/capi/libmicrovmi.h /usr/local/include/
+   sudo install -m 755 target/release/libmicrovmi.so /usr/local/lib/
+   sudo ldconfig
+
+To use another install prefix, pass it to LibVMI's CMake with
+``-DCMAKE_PREFIX_PATH=<prefix>`` (it looks for ``<prefix>/include/libmicrovmi.h``
+and ``<prefix>/lib/libmicrovmi.so``) and add ``<prefix>/lib`` to ``LD_LIBRARY_PATH``.
 
 Building
 --------
@@ -95,50 +112,39 @@ related online documentation:
 
 http://libvmi.com/docs/gcode-install.html
 
-Xen support
-~~~~~~~~~~~
+VirtualBox support
+~~~~~~~~~~~~~~~~~~
+Open a VirtualBox VM by name (``VMI_INIT_DOMAINNAME``): ``vmi_get_access_mode``
+reports ``VMI_VIRTUALBOX``. libmicrovmi reaches the VM with one of two access
+methods, selected through ``vmi_init`` init data:
 
-LibVMI provides support for Xen out-of-the-box. If you install Xen from source,
-make sure the Xen libraries compiled from source are in your LD_LIBRARY_PATH. You don't
-have to recompile LibVMI if you update Xen as LibVMI is able to detect what version of Xen
-you have dynamically at runtime.
+- no init data: VBoxVMI at the VM's default socket, falling back to
+  MachineDebugger only when that socket does not exist (run with
+  ``RUST_LOG=info`` to see which one was picked)
+- ``VMI_INIT_DATA_VBOX_ACCESS_METHOD`` with ``(void *)(uintptr_t)VMI_VBOX_ACCESS_METHOD_MACHINE_DEBUGGER``:
+  the VirtualBox ``IMachineDebugger`` API, never falls back
+- ``VMI_INIT_DATA_VBOX_ACCESS_METHOD`` with ``(void *)(uintptr_t)VMI_VBOX_ACCESS_METHOD_VBOXVMI``:
+  the VBoxVMI socket, never falls back; ``VMI_INIT_DATA_VBOX_SOCKET`` (a ``char *`` path)
+  overrides the VM's default socket
 
-XenServer Support
------------
-Compiling LibVMI on a XenServer dom0 can be challenging as there are no
-development headers and tools present. The recommended way to compile
-is in a separate CentOS installation using the Xen development packages
-matching what XenServer runs on. The compiled LibVMI library and tools
-can then be transferred to the XenServer dom0 and run natively.
+.. code::
+
+   vmi_init_data_t *init_data = malloc(sizeof(vmi_init_data_t) + 2 * sizeof(vmi_init_data_entry_t));
+   init_data->count = 2;
+   init_data->entry[0].type = VMI_INIT_DATA_VBOX_ACCESS_METHOD;
+   init_data->entry[0].data = (void *)(uintptr_t)VMI_VBOX_ACCESS_METHOD_VBOXVMI;
+   init_data->entry[1].type = VMI_INIT_DATA_VBOX_SOCKET;
+   init_data->entry[1].data = "/path/to/vm.sock";
+
+The examples take the same selection from the environment
+(``LIBVMI_VBOX_ACCESS_METHOD=machine-debugger|vboxvmi`` and ``LIBVMI_VBOX_SOCKET``),
+see ``examples/README.md``::
+
+    LIBVMI_VBOX_ACCESS_METHOD=machine-debugger ./build/examples/vcpu-info myvm
 
 KVM support
 ~~~~~~~~~~~
-The KVM driver for LibVMI is based on the new ``KVMi`` subsystem for
-KVM, which aims to bring an official VMI API on this hypervisor.
-
-The current state of these KVM patches is a work-in-progress, but it is mature
-enough to be proposed by default in LibVMI, instead of using previous memory access
-methods (GDB stub or the ``tools/qemu-kvm-patch`` memaccess custom patches for QEMU).
-
-In order to use the LibVMI KVM driver, you will have to setup ``KVM-VMI`` beforehand.
-KVM-VMI is a Github community dedicated to bring a native VMI API on KVM, and
-currently hosting this new API:
-
-https://github.com/KVM-VMI/kvm-vmi
-
-The installation guide can be found at the following link:
-
-https://kvm-vmi.github.io/kvm-vmi/kvmi-v7/setup.html
-
-KVM legacy driver support:
-
-To enable the old KVM memory access methods (GDB stub and QEMU fast-memaccess
-patches), you need to add the ``-DENABLE_KVM_LEGACY`` CMake command line
-argument.
-
-   cd build
-   cmake .. -DENABLE_KVM_LEGACY
-
+The KVMi socket goes to libmicrovmi's KVM driver with ``VMI_INIT_DATA_KVMI_SOCKET``.
 
 Python bindings
 ----------------
@@ -147,11 +153,6 @@ LibVMI is written in C.  If you would rather work with Python, then look at the
 interface to LibVMI with a relatively small performance overhead.
 
 https://github.com/libvmi/python
-
-File / Snapshot Support
------------------------
-If you would like LibVMI to work on physical memory snapshots saved to
-a file, then you don't need any special setup.
 
 Volatility3 Intermediate Symbol Table (IST) Format
 ------------------------------
@@ -219,11 +220,11 @@ Example to enable all debug output:
 
     cmake -DVMI_DEBUG=__VMI_DEBUG_ALL ..
 
-Example to enable selective output (XEN and CORE)
+Example to enable selective output (DRIVER and CORE)
 
 .. code::
 
-    cmake -DVMI_DEBUG='(VMI_DEBUG_XEN | VMI_DEBUG_CORE)' ..
+    cmake -DVMI_DEBUG='(VMI_DEBUG_DRIVER | VMI_DEBUG_CORE)' ..
 
 Community
 ---------
