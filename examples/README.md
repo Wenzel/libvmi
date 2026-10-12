@@ -5,8 +5,11 @@ This folder contains a few examples of code using the LibVMI library.
 Note: some of them take an optional `[<socket>]` parameter. This refers to the
 `KVMi socket`, which needs to be specified when using the KVM driver.
 
-LibVMI talks to the hypervisor through libmicrovmi; VMI events are not
-supported, so the event examples fail at `vmi_init`.
+LibVMI talks to the hypervisor through libmicrovmi; VMI events are limited to
+INT3 interrupt and single-step events (VirtualBox with the VBoxVMI access
+method), so `interrupt-event-example`, `singlestep-event-example` and
+`breakpoint-recoil-example` run there, and the other event examples fail at
+event registration.
 
 Every example selects the VirtualBox access method from the environment
 (`vbox-init-data.h`, force-included by `CMakeLists.txt`, turns these into
