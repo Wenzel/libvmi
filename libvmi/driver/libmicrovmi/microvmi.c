@@ -109,6 +109,12 @@ libmicrovmi_test(
         case KVM:
             *mode = VMI_KVM;
             break;
+        case VirtualBox:
+            *mode = VMI_VIRTUALBOX;
+            break;
+        case Memflow:
+            *mode = VMI_MEMFLOW;
+            break;
         default:
             errprint("libmicrovmi driver has no LibVMI mode\n");
             ret = VMI_FAILURE;
@@ -161,6 +167,12 @@ microvmi_init_vmi(vmi_instance_t vmi, uint32_t UNUSED(init_flags), vmi_init_data
             break;
         case VMI_KVM:
             driver_type = KVM;
+            break;
+        case VMI_VIRTUALBOX:
+            driver_type = VirtualBox;
+            break;
+        case VMI_MEMFLOW:
+            driver_type = Memflow;
             break;
         default:
             errprint("LibVMI mode %d has no libmicrovmi driver\n", vmi->mode);

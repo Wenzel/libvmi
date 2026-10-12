@@ -584,6 +584,8 @@ static inline status_t driver_sanity_check(vmi_mode_t mode)
     switch ( mode ) {
         case VMI_XEN:
         case VMI_KVM:
+        case VMI_VIRTUALBOX:
+        case VMI_MEMFLOW:
             return VMI_SUCCESS;
         case VMI_FILE:
         case VMI_BAREFLANK:

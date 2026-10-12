@@ -71,7 +71,11 @@ typedef enum vmi_mode {
 
     VMI_FILE, /**< libvmi is viewing a file on disk */
 
-    VMI_BAREFLANK /** <libvmi is monitoring a Bareflank VM */
+    VMI_BAREFLANK, /** <libvmi is monitoring a Bareflank VM */
+
+    VMI_VIRTUALBOX, /**< libvmi is monitoring a VirtualBox VM */
+
+    VMI_MEMFLOW /**< libvmi is monitoring a memflow target */
 } vmi_mode_t;
 
 typedef enum vmi_config {
@@ -2237,7 +2241,7 @@ uint64_t vmi_get_vmid(
 /**
  * Gets the current access mode for LibVMI, which tells what
  * resource is being using to access the memory (e.g., VMI_XEN,
- * VMI_KVM, or VMI_FILE).
+ * VMI_KVM, VMI_VIRTUALBOX or VMI_MEMFLOW).
  *
  * If LibVMI is already initialized it will return the active
  * mode. If the LibVMI instance passed is NULL, it will
