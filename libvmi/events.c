@@ -91,14 +91,9 @@ void step_event_free(vmi_event_t *event, status_t rc)
         g_slice_free(vmi_event_t, event);
 }
 
-// only libmicrovmi's VirtualBox driver implements the events the driver slots use
+// every libmicrovmi driver type: one without events fails at event registration
 status_t events_init(vmi_instance_t vmi)
 {
-    if (vmi->mode != VMI_VIRTUALBOX) {
-        errprint("VMI events through libmicrovmi are only supported on VirtualBox!\n");
-        return VMI_FAILURE;
-    }
-
     vmi->interrupt_events = g_hash_table_new(g_direct_hash, g_direct_equal);
     vmi->mem_events_on_gfn = g_hash_table_new(g_direct_hash, g_direct_equal);
     vmi->mem_events_generic = g_hash_table_new(g_direct_hash, g_direct_equal);

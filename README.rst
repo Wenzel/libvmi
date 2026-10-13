@@ -10,9 +10,10 @@ This branch of LibVMI talks to the hypervisor through libmicrovmi_ instead of
 its own drivers: Xen, KVM, VirtualBox and memflow guests are reached through
 the matching libmicrovmi driver (``VMI_XEN``, ``VMI_KVM``, ``VMI_VIRTUALBOX``,
 ``VMI_MEMFLOW`` modes). Memory snapshot files (``VMI_FILE``) and Bareflank are
-not supported. VMI events are limited to INT3 interrupt and single-step events,
-on libmicrovmi drivers that provide them (VirtualBox with the VBoxVMI access
-method). LibVMI can provide access to physical memory for any operating system,
+not supported. VMI events are limited to INT3 interrupt, single-step, and
+CR0/CR3/CR4 and MSR write events, on the libmicrovmi drivers that provide them
+(VirtualBox with the VBoxVMI access method; CR and MSR events need VT-x); event
+registration fails on the others. LibVMI can provide access to physical memory for any operating system,
 and access to virtual memory and kernel symbols from Windows and Linux.
 
 .. _libmicrovmi: https://github.com/Wenzel/libmicrovmi

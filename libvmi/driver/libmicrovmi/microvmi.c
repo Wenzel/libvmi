@@ -27,6 +27,7 @@
 #include "driver/driver_interface.h"
 #include "driver/memory_cache.h"
 #include "driver/libmicrovmi/microvmi.h"
+#include "msr-index.h"
 
 // shortcut: memflow connector is fixed, add init data for it when someone needs another connector
 #define DEFAULT_MEMFLOW_CONNECTOR "qemu_procfs"
@@ -568,8 +569,10 @@ microvmi_resume_vm(vmi_instance_t vmi)
 }
 
 /*
- * VMI events, modelled on LibVMI's KVM driver: INT3 and single step only.
+ * VMI events, modelled on LibVMI's KVM driver: INT3, single step, CR0/CR3/CR4 and MSR writes.
  * Events-pending stays unimplemented: LibVMI then drains with a zero-timeout listen.
+ * Register Intercepts need no driver state: LibVMI's reg_events/msr_events tables hold exactly
+ * the events whose Intercepts are set (an event whose clear failed stays there for shutdown).
  */
 
 static status_t
@@ -664,6 +667,114 @@ microvmi_shutdown_single_step(vmi_instance_t vmi)
     return status;
 }
 
+// set or clear an Intercept on every vCPU; a failed set clears the vCPUs already set
+static status_t
+microvmi_toggle_intercept_all(vmi_instance_t vmi, InterceptType intercept, bool enabled)
+{
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    status_t status = VMI_SUCCESS;
+
+    for (unsigned int vcpu = 0; vcpu < vmi->num_vcpus; vcpu++) {
+        if (microvmi_toggle_intercept(microvmi->ctx, (uint16_t) vcpu, intercept, enabled))
+            continue;
+        errprint("libmicrovmi: failed to %s the %s intercept on vCPU %u\n", enabled ? "set" : "clear",
+                 intercept.tag == InterceptType_Cr ? "CR" : "MSR", vcpu);
+        status = VMI_FAILURE;
+        if (!enabled)
+            continue;
+        while (vcpu--)
+            microvmi_toggle_intercept(microvmi->ctx, (uint16_t) vcpu, intercept, false);
+        break;
+    }
+    return status;
+}
+
+// MSR index also intercepted for the other kind of MSR event (MSR_ANY vs MSR_ALL): leave it alone
+static bool
+microvmi_msr_shared(vmi_instance_t vmi, uint32_t msr, bool from_msr_all)
+{
+    if (vmi->shutting_down)
+        return false;
+    if (from_msr_all)
+        return g_hash_table_contains(vmi->msr_events, GSIZE_TO_POINTER(msr));
+    if (!g_hash_table_contains(vmi->reg_events, GSIZE_TO_POINTER(MSR_ALL)))
+        return false;
+    for (unsigned int i = 0; i < msr_all_len; i++)
+        if (msr_index[msr_all[i]] == msr)
+            return true;
+    return false;
+}
+
+static status_t
+microvmi_set_reg_access(vmi_instance_t vmi, reg_event_t *event)
+{
+    InterceptType intercept = { .tag = InterceptType_Cr };
+    bool enabled;
+
+    switch (event->reg) {
+        case CR0:
+            intercept.cr = Cr0;
+            break;
+        case CR3:
+            intercept.cr = Cr3;
+            break;
+        case CR4:
+            intercept.cr = Cr4;
+            break;
+        case MSR_ANY:
+            if (!event->msr) {
+                errprint("libmicrovmi driver: MSR_ANY needs a nonzero MSR index\n");
+                return VMI_FAILURE;
+            }
+            intercept.tag = InterceptType_Msr;
+            intercept.msr = event->msr;
+            break;
+        case MSR_ALL:
+            intercept.tag = InterceptType_Msr;
+            break;
+        default:
+            errprint("libmicrovmi driver does not support events on register %"PRIu64" (MSRs: MSR_ANY with an index, or MSR_ALL)\n",
+                     event->reg);
+            return VMI_FAILURE;
+    }
+
+    switch (event->in_access) {
+        case VMI_REGACCESS_N:
+            enabled = false;
+            break;
+        case VMI_REGACCESS_W:
+            enabled = true;
+            break;
+        default:
+            errprint("libmicrovmi driver only supports register write events, not access mode %d\n", event->in_access);
+            return VMI_FAILURE;
+    }
+
+    if (event->reg == MSR_ANY && microvmi_msr_shared(vmi, event->msr, false))
+        return VMI_SUCCESS;
+    if (event->reg != MSR_ALL)
+        return microvmi_toggle_intercept_all(vmi, intercept, enabled);
+
+    // MSR_ALL: LibVMI's MSR list, as the KVM driver
+    status_t status = VMI_SUCCESS;
+    for (unsigned int i = 0; i < msr_all_len; i++) {
+        intercept.msr = msr_index[msr_all[i]];
+        if (microvmi_msr_shared(vmi, intercept.msr, true)
+                || VMI_SUCCESS == microvmi_toggle_intercept_all(vmi, intercept, enabled))
+            continue;
+        status = VMI_FAILURE;
+        if (!enabled)
+            continue;
+        while (i--) {
+            intercept.msr = msr_index[msr_all[i]];
+            if (!microvmi_msr_shared(vmi, intercept.msr, true))
+                microvmi_toggle_intercept_all(vmi, intercept, false);
+        }
+        break;
+    }
+    return status;
+}
+
 // reply and release the event's vCPU; consumes event
 static status_t
 microvmi_reply(microvmi_instance_t *microvmi, Event *event, bool reinject)
@@ -682,14 +793,33 @@ static status_t
 microvmi_process_event(vmi_instance_t vmi, Event *event)
 {
     microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    static const reg_t cr_regs[] = { [Cr0] = CR0, [Cr3] = CR3, [Cr4] = CR4 };
     uint16_t vcpu = event->vcpu;
     bool breakpoint = event->kind.tag == EventType_Breakpoint;
+    bool reg = event->kind.tag == EventType_Cr || event->kind.tag == EventType_Msr;
     vmi_event_t *libvmi_event = NULL;
 
-    if (breakpoint)
-        libvmi_event = g_hash_table_lookup(vmi->interrupt_events, GUINT_TO_POINTER(INT3));
-    else if (event->kind.tag == EventType_Singlestep)
-        libvmi_event = g_hash_table_lookup(vmi->ss_events, GUINT_TO_POINTER(vcpu));
+    switch (event->kind.tag) {
+        case EventType_Breakpoint:
+            libvmi_event = g_hash_table_lookup(vmi->interrupt_events, GUINT_TO_POINTER(INT3));
+            break;
+        case EventType_Singlestep:
+            libvmi_event = g_hash_table_lookup(vmi->ss_events, GUINT_TO_POINTER(vcpu));
+            break;
+        case EventType_Cr:
+            libvmi_event = g_hash_table_lookup(vmi->reg_events, GSIZE_TO_POINTER(cr_regs[event->kind.cr.cr_type]));
+            break;
+        case EventType_Msr:
+            libvmi_event = g_hash_table_lookup(vmi->msr_events, GSIZE_TO_POINTER(event->kind.msr.msr_type));
+            if (!libvmi_event) {
+                libvmi_event = g_hash_table_lookup(vmi->reg_events, GSIZE_TO_POINTER(MSR_ALL));
+                if (libvmi_event)
+                    libvmi_event->reg_event.msr = event->kind.msr.msr_type;
+            }
+            break;
+        default:
+            break;
+    }
 
     if (!libvmi_event) {
         // raised before its LibVMI event was cleared: let the guest run as if it was not intercepted
@@ -701,7 +831,7 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     registers_t regs;
     if (VMI_FAILURE == microvmi_get_vcpuregs(vmi, &regs, vcpu)) {
         errprint("libmicrovmi: failed to read the registers of vCPU %"PRIu16" at an event\n", vcpu);
-        // no reinjection: the vCPU re-executes and raises the event again
+        // no reinjection: the vCPU re-executes and raises the event again (a CR/MSR write proceeds unseen)
         microvmi_reply(microvmi, event, false);
         return VMI_FAILURE;
     }
@@ -716,6 +846,14 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         libvmi_event->interrupt_event.insn_length = event->kind.breakpoint.insn_len;
         // default reinject behavior: invalid, only 1 reinjects
         libvmi_event->interrupt_event.reinject = -1;
+    } else if (event->kind.tag == EventType_Cr) {
+        libvmi_event->reg_event.out_access = VMI_REGACCESS_W;
+        libvmi_event->reg_event.value = event->kind.cr.new_;
+        libvmi_event->reg_event.previous = event->kind.cr.old;
+    } else if (event->kind.tag == EventType_Msr) {
+        libvmi_event->reg_event.out_access = VMI_REGACCESS_W;
+        libvmi_event->reg_event.value = event->kind.msr.value;
+        libvmi_event->reg_event.previous = event->kind.msr.old;
     } else {
         libvmi_event->ss_event.gfn = event->kind.singlestep.gpa >> vmi->page_shift;
         libvmi_event->ss_event.offset = regs.x86.rip & VMI_BIT_MASK(0, 11);
@@ -727,9 +865,10 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     vmi->event_callback = 0;
 
     status_t status = VMI_SUCCESS;
-    if (response & ~VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP)
-        errprint("libmicrovmi driver: unhandled event responses 0x%"PRIx32"\n",
-                 (uint32_t) (response & ~VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP));
+    // a register write cannot be denied: like KVM, DENY is ignored and the write proceeds
+    event_response_t handled = VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP | (reg ? VMI_EVENT_RESPONSE_DENY : 0);
+    if (response & ~handled)
+        errprint("libmicrovmi driver: unhandled event responses 0x%"PRIx32"\n", (uint32_t) (response & ~handled));
     if (response & VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP) {
         vmi_event_t *step_event = g_hash_table_lookup(vmi->ss_events, GUINT_TO_POINTER(vcpu));
         if (step_event && !g_hash_table_lookup_extended(vmi->clear_events, step_event, NULL, NULL))
@@ -766,6 +905,15 @@ microvmi_events_listen(vmi_instance_t vmi, uint32_t timeout)
     return status;
 }
 
+// clear a register event's Intercepts, the event stays registered in LibVMI
+static void
+microvmi_clear_reg_event(gpointer UNUSED(key), gpointer value, gpointer data)
+{
+    reg_event_t reg_event = ((vmi_event_t *) value)->reg_event;
+    reg_event.in_access = VMI_REGACCESS_N;
+    microvmi_set_reg_access((vmi_instance_t) data, &reg_event);
+}
+
 // the guest runs normally after vmi_destroy, even without vmi_clear_event
 static void
 microvmi_events_destroy(vmi_instance_t vmi)
@@ -773,12 +921,16 @@ microvmi_events_destroy(vmi_instance_t vmi)
     microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
     interrupt_event_t int3 = { .intr = INT3 };
 
-    // both log their failures
+    // all log their failures
     if (microvmi->intr_on)
         microvmi_set_intr_access(vmi, &int3, false);
     for (uint32_t vcpu = 0; vcpu < vmi->num_vcpus; vcpu++)
         if (microvmi->sstep_on[vcpu])
             microvmi_stop_single_step(vmi, vcpu);
+    if (vmi->reg_events)
+        g_hash_table_foreach(vmi->reg_events, microvmi_clear_reg_event, vmi);
+    if (vmi->msr_events)
+        g_hash_table_foreach(vmi->msr_events, microvmi_clear_reg_event, vmi);
 }
 
 status_t
@@ -804,6 +956,7 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.resume_vm_ptr = &microvmi_resume_vm;
     driver.events_listen_ptr = &microvmi_events_listen;
     driver.set_intr_access_ptr = &microvmi_set_intr_access;
+    driver.set_reg_access_ptr = &microvmi_set_reg_access;
     driver.start_single_step_ptr = &microvmi_start_single_step;
     driver.stop_single_step_ptr = &microvmi_stop_single_step;
     driver.shutdown_single_step_ptr = &microvmi_shutdown_single_step;

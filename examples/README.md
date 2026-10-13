@@ -6,10 +6,11 @@ Note: some of them take an optional `[<socket>]` parameter. This refers to the
 `KVMi socket`, which needs to be specified when using the KVM driver.
 
 LibVMI talks to the hypervisor through libmicrovmi; VMI events are limited to
-INT3 interrupt and single-step events (VirtualBox with the VBoxVMI access
-method), so `interrupt-event-example`, `singlestep-event-example` and
-`breakpoint-recoil-example` run there, and the other event examples fail at
-event registration.
+INT3 interrupt, single-step, and CR0/CR3/CR4 and MSR write events (VirtualBox
+with the VBoxVMI access method; CR and MSR events need VT-x), so
+`interrupt-event-example`, `singlestep-event-example`,
+`breakpoint-recoil-example`, `cr3-event-example` and `msr-event-example` run
+there, and the other event examples fail at event registration.
 
 Every example selects the VirtualBox access method from the environment
 (`vbox-init-data.h`, force-included by `CMakeLists.txt`, turns these into
