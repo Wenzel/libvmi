@@ -544,9 +544,13 @@ status_t clear_reg_event(vmi_instance_t vmi, vmi_event_t *event)
 
 status_t clear_mem_event(vmi_instance_t vmi, vmi_event_t *event)
 {
-    /* For generic events we just have to remove the handler */
     if ( event->mem_event.generic ) {
-        /* No point if we are shutting down because we will just destroy the table anyway */
+        if ( g_hash_table_lookup(vmi->mem_events_generic, GUINT_TO_POINTER(event->mem_event.in_access)) != event )
+            return VMI_FAILURE;
+        if ( !vmi->shutting_down && vmi->driver.clear_generic_mem_access_ptr
+                && VMI_FAILURE == vmi->driver.clear_generic_mem_access_ptr(vmi, event->mem_event.in_access) )
+            return VMI_FAILURE;
+
         if ( !vmi->shutting_down )
             g_hash_table_remove(vmi->mem_events_generic, GUINT_TO_POINTER(event->mem_event.in_access));
 

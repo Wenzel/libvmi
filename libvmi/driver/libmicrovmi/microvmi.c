@@ -24,6 +24,7 @@
 #include <libmicrovmi.h>
 
 #include "private.h"
+#include "arch/intel.h"
 #include "driver/driver_interface.h"
 #include "driver/memory_cache.h"
 #include "driver/libmicrovmi/microvmi.h"
@@ -37,6 +38,8 @@ typedef struct microvmi_instance {
     char *name;
     bool intr_on;    // Breakpoint intercept set on every vCPU
     bool *sstep_on;  // per vCPU: Singlestep intercept set, toggled by VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP
+    bool pf_on;      // Pagefault (page-access) intercept set on every vCPU, while pages are restricted
+    GHashTable *restricted;  // GFNs whose access this client restricted, restored at shutdown
 } microvmi_instance_t;
 
 static inline microvmi_instance_t *
@@ -211,6 +214,7 @@ microvmi_init_vmi(vmi_instance_t vmi, uint32_t UNUSED(init_flags), vmi_init_data
     microvmi->sstep_on = g_try_new0(bool, vcpu_count);
     if (!microvmi->sstep_on)
         return VMI_FAILURE;
+    microvmi->restricted = g_hash_table_new(g_direct_hash, g_direct_equal);
 
     // age 1, like the KVM driver: pages are copies, refresh them on a running guest
     memory_cache_init(vmi, microvmi_get_memory, microvmi_release_memory, 1);
@@ -233,6 +237,8 @@ microvmi_destroy_driver(vmi_instance_t vmi)
         microvmi_destroy(microvmi->ctx);
     }
     g_free(microvmi->sstep_on);
+    if (microvmi->restricted)
+        g_hash_table_destroy(microvmi->restricted);
     g_free(microvmi->name);
     g_free(microvmi);
     vmi->driver.driver_data = NULL;
@@ -569,7 +575,8 @@ microvmi_resume_vm(vmi_instance_t vmi)
 }
 
 /*
- * VMI events, modelled on LibVMI's KVM driver: INT3, single step, CR0/CR3/CR4 and MSR writes.
+ * VMI events, modelled on LibVMI's KVM driver: INT3, single step, CR0/CR3/CR4 and MSR writes,
+ * page access (memory events).
  * Events-pending stays unimplemented: LibVMI then drains with a zero-timeout listen.
  * Register Intercepts need no driver state: LibVMI's reg_events/msr_events tables hold exactly
  * the events whose Intercepts are set (an event whose clear failed stays there for shutdown).
@@ -678,7 +685,8 @@ microvmi_toggle_intercept_all(vmi_instance_t vmi, InterceptType intercept, bool 
         if (microvmi_toggle_intercept(microvmi->ctx, (uint16_t) vcpu, intercept, enabled))
             continue;
         errprint("libmicrovmi: failed to %s the %s intercept on vCPU %u\n", enabled ? "set" : "clear",
-                 intercept.tag == InterceptType_Cr ? "CR" : "MSR", vcpu);
+                 intercept.tag == InterceptType_Cr ? "CR" : intercept.tag == InterceptType_Msr ? "MSR" : "page-access",
+                 vcpu);
         status = VMI_FAILURE;
         if (!enabled)
             continue;
@@ -775,18 +783,128 @@ microvmi_set_reg_access(vmi_instance_t vmi, reg_event_t *event)
     return status;
 }
 
-// reply and release the event's vCPU; consumes event
+// set a page's allowed access; the page-access Intercept is set on every vCPU while pages are restricted
+static status_t
+microvmi_set_page(vmi_instance_t vmi, addr_t gfn, Access allowed)
+{
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    InterceptType pagefault = { .tag = InterceptType_Pagefault };
+    bool restricted = allowed != (Access_R | Access_W | Access_X);
+    status_t status = VMI_SUCCESS;
+
+    if (restricted && !microvmi->pf_on) {
+        if (VMI_FAILURE == microvmi_toggle_intercept_all(vmi, pagefault, true))
+            return VMI_FAILURE;
+        microvmi->pf_on = true;
+    }
+
+    if (!microvmi_set_page_access(microvmi->ctx, gfn << vmi->page_shift, allowed)) {
+        errprint("libmicrovmi: failed to set the access of GFN 0x%"PRIx64"\n", gfn);
+        status = VMI_FAILURE;
+    } else if (restricted) {
+        g_hash_table_insert(microvmi->restricted, GSIZE_TO_POINTER(gfn), GUINT_TO_POINTER((unsigned int) allowed + 1));
+    } else {
+        g_hash_table_remove(microvmi->restricted, GSIZE_TO_POINTER(gfn));
+    }
+
+    if (microvmi->pf_on && !g_hash_table_size(microvmi->restricted)
+            && VMI_SUCCESS == microvmi_toggle_intercept_all(vmi, pagefault, false))
+        microvmi->pf_on = false;
+    return status;
+}
+
+// LibVMI's denied access onto libmicrovmi's allowed access, as the KVM driver
+static status_t
+microvmi_set_mem_access(vmi_instance_t vmi, addr_t gpfn, vmi_mem_access_t page_access_flag, uint16_t slat_id)
+{
+    Access allowed;
+
+    if (slat_id) {
+        errprint("libmicrovmi driver does not support alternate memory views (SLAT id %"PRIu16")\n", slat_id);
+        return VMI_FAILURE;
+    }
+    if (VMI_FAILURE == intel_mem_access_sanity_check(page_access_flag))
+        return VMI_FAILURE;
+
+    switch (page_access_flag) {
+        case VMI_MEMACCESS_N:
+            allowed = Access_R | Access_W | Access_X;
+            break;
+        case VMI_MEMACCESS_W:
+            allowed = Access_R | Access_X;
+            break;
+        case VMI_MEMACCESS_X:
+            allowed = Access_R | Access_W;
+            break;
+        case VMI_MEMACCESS_RW:
+            allowed = Access_X;
+            break;
+        case VMI_MEMACCESS_WX:
+            allowed = Access_R;
+            break;
+        case VMI_MEMACCESS_RWX:
+            allowed = Access_NIL;
+            break;
+        default:
+            errprint("libmicrovmi driver: invalid memaccess setting requested: %d\n", page_access_flag);
+            return VMI_FAILURE;
+    }
+    return microvmi_set_page(vmi, gpfn, allowed);
+}
+
+// libmicrovmi has no range call: page by page, gpfn_end excluded as on Xen and KVM
+static status_t
+microvmi_set_mem_access_range(vmi_instance_t vmi, addr_t gpfn_start, addr_t gpfn_end,
+                              vmi_mem_access_t page_access_flag, uint16_t slat_id)
+{
+    for (addr_t gfn = gpfn_start; gfn < gpfn_end; gfn++)
+        if (VMI_FAILURE == microvmi_set_mem_access(vmi, gfn, page_access_flag, slat_id))
+            return VMI_FAILURE;
+    return VMI_SUCCESS;
+}
+
+// the page's memory event, else the first generic one for the access (KVM calls every matching one)
+static vmi_event_t *
+microvmi_mem_event(vmi_instance_t vmi, addr_t gfn, vmi_mem_access_t out_access)
+{
+    vmi_event_t *event = g_hash_table_lookup(vmi->mem_events_on_gfn, GSIZE_TO_POINTER(gfn));
+    if (event && (event->mem_event.in_access & out_access))
+        return event;
+
+    GHashTableIter i;
+    vmi_mem_access_t *key = NULL;
+    ghashtable_foreach(vmi->mem_events_generic, i, &key, &event)
+        if (GPOINTER_TO_UINT(key) & out_access)
+            return event;
+    return NULL;
+}
+
+// reply and release the event's vCPU. A refused emulation leaves the vCPU parked and the event
+// ours: retry the instruction plainly instead, so that the vCPU never stays parked
+static status_t
+microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType reply)
+{
+    uint16_t vcpu = event->vcpu;
+
+    if (microvmi_reply_event(microvmi->ctx, event, reply))
+        return VMI_SUCCESS;
+    errprint("libmicrovmi: failed to reply to the event on vCPU %"PRIu16"\n", vcpu);
+
+    if (reply.tag != EventReplyType_Continue) {
+        EventReplyType retry = { .tag = EventReplyType_Continue, .continue_ = { .reinject = false } };
+        if (microvmi_reply_event(microvmi->ctx, event, retry))
+            return VMI_FAILURE;
+        errprint("libmicrovmi: failed to retry the instruction on vCPU %"PRIu16"\n", vcpu);
+    }
+    // shortcut: the C API cannot free an unreplied Event, it leaks; only on a lost connection
+    return VMI_FAILURE;
+}
+
 static status_t
 microvmi_reply(microvmi_instance_t *microvmi, Event *event, bool reinject)
 {
     EventReplyType reply = { .tag = EventReplyType_Continue, .continue_ = { .reinject = reinject } };
-    uint16_t vcpu = event->vcpu;
-
-    if (!microvmi_reply_event(microvmi->ctx, event, reply)) {
-        errprint("libmicrovmi: failed to reply to the event on vCPU %"PRIu16"\n", vcpu);
-        return VMI_FAILURE;
-    }
-    return VMI_SUCCESS;
+    return microvmi_reply_with(microvmi, event, reply);
 }
 
 static status_t
@@ -797,6 +915,8 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     uint16_t vcpu = event->vcpu;
     bool breakpoint = event->kind.tag == EventType_Breakpoint;
     bool reg = event->kind.tag == EventType_Cr || event->kind.tag == EventType_Msr;
+    bool pagefault = event->kind.tag == EventType_Pagefault;
+    vmi_mem_access_t out_access = VMI_MEMACCESS_INVALID;
     vmi_event_t *libvmi_event = NULL;
 
     switch (event->kind.tag) {
@@ -817,6 +937,15 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
                     libvmi_event->reg_event.msr = event->kind.msr.msr_type;
             }
             break;
+        case EventType_Pagefault:
+            if (event->kind.pagefault.access & Access_R)
+                out_access |= VMI_MEMACCESS_R;
+            if (event->kind.pagefault.access & Access_W)
+                out_access |= VMI_MEMACCESS_W;
+            if (event->kind.pagefault.access & Access_X)
+                out_access |= VMI_MEMACCESS_X;
+            libvmi_event = microvmi_mem_event(vmi, event->kind.pagefault.gpa >> vmi->page_shift, out_access);
+            break;
         default:
             break;
     }
@@ -825,6 +954,15 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         // raised before its LibVMI event was cleared: let the guest run as if it was not intercepted
         dbprint(VMI_DEBUG_DRIVER, "--libmicrovmi: no LibVMI event for event kind %d on vCPU %"PRIu16"\n",
                 (int) event->kind.tag, vcpu);
+        if (pagefault) {
+            Access allowed;
+            if (microvmi_get_page_access(microvmi->ctx, event->kind.pagefault.gpa, &allowed)
+                && (allowed & event->kind.pagefault.access))
+                return microvmi_reply(microvmi, event, false);
+            // A different event may still restrict the page: let this unmatched access through.
+            EventReplyType emulate = { .tag = EventReplyType_Emulate };
+            return microvmi_reply_with(microvmi, event, emulate);
+        }
         return microvmi_reply(microvmi, event, breakpoint);
     }
 
@@ -854,6 +992,11 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         libvmi_event->reg_event.out_access = VMI_REGACCESS_W;
         libvmi_event->reg_event.value = event->kind.msr.value;
         libvmi_event->reg_event.previous = event->kind.msr.old;
+    } else if (pagefault) {
+        libvmi_event->mem_event.gfn = event->kind.pagefault.gpa >> vmi->page_shift;
+        libvmi_event->mem_event.offset = event->kind.pagefault.gpa & VMI_BIT_MASK(0, 11);
+        libvmi_event->mem_event.gla = event->kind.pagefault.gva;
+        libvmi_event->mem_event.out_access = out_access;
     } else {
         libvmi_event->ss_event.gfn = event->kind.singlestep.gpa >> vmi->page_shift;
         libvmi_event->ss_event.offset = regs.x86.rip & VMI_BIT_MASK(0, 11);
@@ -866,7 +1009,9 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
 
     status_t status = VMI_SUCCESS;
     // a register write cannot be denied: like KVM, DENY is ignored and the write proceeds
-    event_response_t handled = VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP | (reg ? VMI_EVENT_RESPONSE_DENY : 0);
+    event_response_t handled = VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP | (reg ? VMI_EVENT_RESPONSE_DENY : 0)
+                               | (breakpoint ? VMI_EVENT_RESPONSE_SET_EMUL_INSN : 0)
+                               | (pagefault ? VMI_EVENT_RESPONSE_EMULATE | VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA : 0);
     if (response & ~handled)
         errprint("libmicrovmi driver: unhandled event responses 0x%"PRIx32"\n", (uint32_t) (response & ~handled));
     if (response & VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP) {
@@ -877,10 +1022,31 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
             status = VMI_FAILURE;
     }
 
-    bool reinject = breakpoint && libvmi_event->interrupt_event.reinject == 1;
+    // emul_insn and emul_read share a union with x86_regs: read them before clearing it
+    EventReplyType reply = {
+        .tag = EventReplyType_Continue,
+        .continue_ = { .reinject = breakpoint && libvmi_event->interrupt_event.reinject == 1 },
+    };
+    if (breakpoint && (response & VMI_EVENT_RESPONSE_SET_EMUL_INSN) && libvmi_event->emul_insn) {
+        // the supplied instruction replaces the int3: reinject is dropped
+        reply.tag = EventReplyType_EmulateInsn;
+        memcpy(reply.emulate_insn.data, libvmi_event->emul_insn->data, sizeof(reply.emulate_insn.data));
+        if (!libvmi_event->emul_insn->dont_free)
+            free(libvmi_event->emul_insn);
+    } else if (pagefault && (response & VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA) && libvmi_event->emul_read) {
+        // like Xen, a size over the buffer is capped
+        reply.tag = EventReplyType_EmulateReadData;
+        reply.emulate_read_data.size = libvmi_event->emul_read->size < sizeof(reply.emulate_read_data.data)
+                                       ? libvmi_event->emul_read->size : sizeof(reply.emulate_read_data.data);
+        memcpy(reply.emulate_read_data.data, libvmi_event->emul_read->data, reply.emulate_read_data.size);
+        if (!libvmi_event->emul_read->dont_free)
+            free(libvmi_event->emul_read);
+    } else if (pagefault && (response & VMI_EVENT_RESPONSE_EMULATE)) {
+        reply.tag = EventReplyType_Emulate;
+    }
     libvmi_event->x86_regs = NULL;
     // reply even if toggling failed: the vCPU must not stay parked
-    if (VMI_FAILURE == microvmi_reply(microvmi, event, reinject))
+    if (VMI_FAILURE == microvmi_reply_with(microvmi, event, reply))
         status = VMI_FAILURE;
     return status;
 }
@@ -914,6 +1080,95 @@ microvmi_clear_reg_event(gpointer UNUSED(key), gpointer value, gpointer data)
     microvmi_set_reg_access((vmi_instance_t) data, &reg_event);
 }
 
+// lift a restricted page's restriction; kept in the table if that fails
+static gboolean
+microvmi_restore_page(gpointer key, gpointer UNUSED(value), gpointer data)
+{
+    vmi_instance_t vmi = data;
+    addr_t gfn = GPOINTER_TO_SIZE(key);
+
+    if (microvmi_set_page_access(microvmi_get_instance(vmi)->ctx, gfn << vmi->page_shift, Access_R | Access_W | Access_X))
+        return TRUE;
+    errprint("libmicrovmi: failed to restore the access of GFN 0x%"PRIx64"\n", gfn);
+    return FALSE;
+}
+
+// Keep the original restrictions until every page and the intercept transition succeed.
+static status_t
+microvmi_clear_generic_mem_access(vmi_instance_t vmi, vmi_mem_access_t removed)
+{
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    GHashTableIter iter;
+    gpointer key, value;
+    vmi_event_t *event;
+    vmi_mem_access_t *access;
+    Access remaining = Access_NIL;
+    Access full = Access_R | Access_W | Access_X;
+    bool restricted_left = false;
+    GPtrArray *changed = g_ptr_array_new();
+    InterceptType pagefault = { .tag = InterceptType_Pagefault };
+
+    ghashtable_foreach(vmi->mem_events_generic, iter, &access, &event) {
+        vmi_mem_access_t mask = GPOINTER_TO_UINT(access);
+        if (mask == removed)
+            continue;
+        if (mask & VMI_MEMACCESS_R)
+            remaining |= Access_R;
+        if (mask & VMI_MEMACCESS_W)
+            remaining |= Access_W;
+        if (mask & VMI_MEMACCESS_X)
+            remaining |= Access_X;
+    }
+
+    g_hash_table_iter_init(&iter, microvmi->restricted);
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        addr_t gfn = GPOINTER_TO_SIZE(key);
+        Access original = (Access) (GPOINTER_TO_UINT(value) - 1);
+        Access allowed = original | (full & ~remaining);
+        if (allowed != full)
+            restricted_left = true;
+        if (allowed == original)
+            continue;
+        if (!microvmi_set_page_access(microvmi->ctx, gfn << vmi->page_shift, allowed)) {
+            errprint("libmicrovmi: failed to update the access of GFN 0x%"PRIx64"\n", gfn);
+            goto rollback;
+        }
+        g_ptr_array_add(changed, key);
+    }
+    if (microvmi->pf_on && !restricted_left
+            && VMI_FAILURE == microvmi_toggle_intercept_all(vmi, pagefault, false)) {
+        microvmi_toggle_intercept_all(vmi, pagefault, true);
+        goto rollback;
+    }
+
+    if (!restricted_left)
+        microvmi->pf_on = false;
+    g_hash_table_iter_init(&iter, microvmi->restricted);
+    while (g_hash_table_iter_next(&iter, &key, &value)) {
+        Access original = (Access) (GPOINTER_TO_UINT(value) - 1);
+        Access allowed = original | (full & ~remaining);
+        if (allowed == original)
+            continue;
+        if (allowed == full)
+            g_hash_table_iter_remove(&iter);
+        else
+            g_hash_table_iter_replace(&iter, GUINT_TO_POINTER((unsigned int) allowed + 1));
+    }
+    g_ptr_array_free(changed, TRUE);
+    return VMI_SUCCESS;
+
+rollback:
+    for (guint i = 0; i < changed->len; i++) {
+        addr_t gfn = GPOINTER_TO_SIZE(g_ptr_array_index(changed, i));
+        Access original = (Access) (GPOINTER_TO_UINT(g_hash_table_lookup(microvmi->restricted,
+                                   GSIZE_TO_POINTER(gfn))) - 1);
+        if (!microvmi_set_page_access(microvmi->ctx, gfn << vmi->page_shift, original))
+            errprint("libmicrovmi: failed to re-restrict GFN 0x%"PRIx64" during rollback\n", gfn);
+    }
+    g_ptr_array_free(changed, TRUE);
+    return VMI_FAILURE;
+}
+
 // the guest runs normally after vmi_destroy, even without vmi_clear_event
 static void
 microvmi_events_destroy(vmi_instance_t vmi)
@@ -931,6 +1186,11 @@ microvmi_events_destroy(vmi_instance_t vmi)
         g_hash_table_foreach(vmi->reg_events, microvmi_clear_reg_event, vmi);
     if (vmi->msr_events)
         g_hash_table_foreach(vmi->msr_events, microvmi_clear_reg_event, vmi);
+    // Restore restrictions left by per-page events or a failed generic clear.
+    g_hash_table_foreach_remove(microvmi->restricted, microvmi_restore_page, vmi);
+    InterceptType pagefault = { .tag = InterceptType_Pagefault };
+    if (microvmi->pf_on && VMI_SUCCESS == microvmi_toggle_intercept_all(vmi, pagefault, false))
+        microvmi->pf_on = false;
 }
 
 status_t
@@ -957,6 +1217,9 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.events_listen_ptr = &microvmi_events_listen;
     driver.set_intr_access_ptr = &microvmi_set_intr_access;
     driver.set_reg_access_ptr = &microvmi_set_reg_access;
+    driver.set_mem_access_ptr = &microvmi_set_mem_access;
+    driver.set_mem_access_range_ptr = &microvmi_set_mem_access_range;
+    driver.clear_generic_mem_access_ptr = &microvmi_clear_generic_mem_access;
     driver.start_single_step_ptr = &microvmi_start_single_step;
     driver.stop_single_step_ptr = &microvmi_stop_single_step;
     driver.shutdown_single_step_ptr = &microvmi_shutdown_single_step;
