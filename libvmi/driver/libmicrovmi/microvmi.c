@@ -1101,6 +1101,8 @@ microvmi_events_listen(vmi_instance_t vmi, uint32_t timeout)
     if (!event)
         return VMI_SUCCESS;
 
+    // the guest ran since the last event: the cached pages are copies, not mappings as on Xen
+    memory_cache_flush(vmi);
     status_t status = microvmi_process_event(vmi, event);
 
     // vmi_clear_event() calls from a callback were deferred until the event was replied
