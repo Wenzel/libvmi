@@ -115,6 +115,9 @@ typedef struct driver_interface {
     status_t (*alloc_gfn_ptr)(
         vmi_instance_t,
         uint64_t gfn);
+    status_t (*alloc_hidden_gfn_ptr)(
+        vmi_instance_t,
+        uint64_t *gfn);
     status_t (*free_gfn_ptr)(
         vmi_instance_t,
         uint64_t gfn);

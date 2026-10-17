@@ -14,7 +14,9 @@ not supported. VMI events are limited to INT3 interrupt, single-step,
 CR0/CR3/CR4 and MSR write, and memory (page access) events with emulation
 responses, on the libmicrovmi drivers that provide them (VirtualBox with the
 VBoxVMI access method; all but INT3 and single-step need VT-x); event
-registration fails on the others. LibVMI can provide access to physical memory for any operating system,
+registration fails on the others. VBoxVMI also backs LibVMI's alternate-SLAT
+operations with Memory views and ``vmi_alloc_hidden_gfn`` with Hidden pages.
+LibVMI can provide access to physical memory for any operating system,
 and access to virtual memory and kernel symbols from Windows and Linux.
 
 .. _libmicrovmi: https://github.com/Wenzel/libmicrovmi

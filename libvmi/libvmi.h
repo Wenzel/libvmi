@@ -2624,13 +2624,25 @@ status_t vmi_alloc_gfn(
     vmi_instance_t vmi,
     uint64_t gfn) NOEXCEPT;
 
+/**
+ * Allocates a physical page the hypervisor picks, outside the guest's RAM:
+ * the guest is never told about it, it is meant as a target for
+ * vmi_slat_change_gfn. Fails once the hypervisor's pool is exhausted
+ * (VirtualBox: Hidden pages, VBoxInternal/VMI/HiddenPages, set before the VM starts).
+ *
+ * @param[in] vmi LibVMI Instance
+ * @param[out] gfn gfn of the allocated physical page
+ */
+status_t vmi_alloc_hidden_gfn(
+    vmi_instance_t vmi,
+    uint64_t *gfn) NOEXCEPT;
 
 /**
  * Frees a physical page that has previously been allocated via
- * vmi_alloc_gfn.
+ * vmi_alloc_gfn or vmi_alloc_hidden_gfn.
  * Note that the maximum physical address cached by libvmi
  * will not be updated accordingly. Freeing a page that has not
- * been allocated via vmi_alloc_gfn is undefined behavior.
+ * been allocated via vmi_alloc_gfn or vmi_alloc_hidden_gfn is undefined behavior.
  *
  * @param[in] vmi LibVMI Instance
  * @param[in] gfn gfn of physical page to be freed
