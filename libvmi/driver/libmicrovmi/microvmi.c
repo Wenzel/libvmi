@@ -301,16 +301,10 @@ microvmi_get_memsize(vmi_instance_t vmi, uint64_t *allocated_ram_size, addr_t *m
     return VMI_SUCCESS;
 }
 
-static status_t
-microvmi_get_vcpuregs(vmi_instance_t vmi, registers_t *regs, unsigned long vcpu)
+static void
+microvmi_to_x86(const X86Registers *r, x86_registers_t *x86)
 {
-    Registers microvmi_regs;
-    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu, &microvmi_regs))
-        return VMI_FAILURE;
-
-    const X86Registers *r = &microvmi_regs.x86;
-    x86_registers_t *x86 = &regs->x86;
-    memset(regs, 0, sizeof(*regs));
+    memset(x86, 0, sizeof(*x86));
     x86->rax = r->rax;
     x86->rbx = r->rbx;
     x86->rcx = r->rcx;
@@ -356,7 +350,141 @@ microvmi_get_vcpuregs(vmi_instance_t vmi, registers_t *regs, unsigned long vcpu)
     x86->idtr_limit = r->idt.limit;
     x86->gdtr_base = r->gdt.base;
     x86->gdtr_limit = r->gdt.limit;
+}
+
+static status_t
+microvmi_get_vcpuregs(vmi_instance_t vmi, registers_t *regs, unsigned long vcpu)
+{
+    Registers microvmi_regs;
+    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu, &microvmi_regs))
+        return VMI_FAILURE;
+
+    memset(regs, 0, sizeof(*regs));
+    microvmi_to_x86(&microvmi_regs.x86, &regs->x86);
     return VMI_SUCCESS;
+}
+
+/* The x86_registers_t fields microvmi_to_x86 fills, NULL for the others */
+static uint64_t *
+x86_reg_field(x86_registers_t *x86, reg_t reg)
+{
+    switch (reg) {
+        case RAX:
+            return &x86->rax;
+        case RBX:
+            return &x86->rbx;
+        case RCX:
+            return &x86->rcx;
+        case RDX:
+            return &x86->rdx;
+        case RBP:
+            return &x86->rbp;
+        case RSI:
+            return &x86->rsi;
+        case RDI:
+            return &x86->rdi;
+        case RSP:
+            return &x86->rsp;
+        case R8:
+            return &x86->r8;
+        case R9:
+            return &x86->r9;
+        case R10:
+            return &x86->r10;
+        case R11:
+            return &x86->r11;
+        case R12:
+            return &x86->r12;
+        case R13:
+            return &x86->r13;
+        case R14:
+            return &x86->r14;
+        case R15:
+            return &x86->r15;
+        case RIP:
+            return &x86->rip;
+        case RFLAGS:
+            return &x86->rflags;
+        case CR0:
+            return &x86->cr0;
+        case CR2:
+            return &x86->cr2;
+        case CR3:
+            return &x86->cr3;
+        case CR4:
+            return &x86->cr4;
+        case CS_SEL:
+            return &x86->cs_sel;
+        case DS_SEL:
+            return &x86->ds_sel;
+        case ES_SEL:
+            return &x86->es_sel;
+        case FS_SEL:
+            return &x86->fs_sel;
+        case GS_SEL:
+            return &x86->gs_sel;
+        case SS_SEL:
+            return &x86->ss_sel;
+        case TR_SEL:
+            return &x86->tr_sel;
+        case LDTR_SEL:
+            return &x86->ldt_sel;
+        case CS_LIMIT:
+            return &x86->cs_limit;
+        case DS_LIMIT:
+            return &x86->ds_limit;
+        case ES_LIMIT:
+            return &x86->es_limit;
+        case FS_LIMIT:
+            return &x86->fs_limit;
+        case GS_LIMIT:
+            return &x86->gs_limit;
+        case SS_LIMIT:
+            return &x86->ss_limit;
+        case TR_LIMIT:
+            return &x86->tr_limit;
+        case LDTR_LIMIT:
+            return &x86->ldt_limit;
+        case IDTR_LIMIT:
+            return &x86->idtr_limit;
+        case GDTR_LIMIT:
+            return &x86->gdtr_limit;
+        case CS_BASE:
+            return &x86->cs_base;
+        case DS_BASE:
+            return &x86->ds_base;
+        case ES_BASE:
+            return &x86->es_base;
+        case FS_BASE:
+            return &x86->fs_base;
+        case GS_BASE:
+            return &x86->gs_base;
+        case SS_BASE:
+            return &x86->ss_base;
+        case TR_BASE:
+            return &x86->tr_base;
+        case LDTR_BASE:
+            return &x86->ldt_base;
+        case IDTR_BASE:
+            return &x86->idtr_base;
+        case GDTR_BASE:
+            return &x86->gdtr_base;
+        case SYSENTER_CS:
+            return &x86->sysenter_cs;
+        case SYSENTER_ESP:
+            return &x86->sysenter_esp;
+        case SYSENTER_EIP:
+            return &x86->sysenter_eip;
+        case MSR_LSTAR:
+            return &x86->msr_lstar;
+        case MSR_EFER:
+            return &x86->msr_efer;
+        case MSR_STAR:
+            return &x86->msr_star;
+        default:
+            dbprint(VMI_DEBUG_DRIVER, "--libmicrovmi: register %"PRIu64" is not available\n", reg);
+            return NULL;
+    }
 }
 
 static status_t
@@ -366,181 +494,106 @@ microvmi_get_vcpureg(vmi_instance_t vmi, uint64_t *value, reg_t reg, unsigned lo
     if (VMI_FAILURE == microvmi_get_vcpuregs(vmi, &regs, vcpu))
         return VMI_FAILURE;
 
-    const x86_registers_t *x86 = &regs.x86;
-    switch (reg) {
-        case RAX:
-            *value = x86->rax;
-            break;
-        case RBX:
-            *value = x86->rbx;
-            break;
-        case RCX:
-            *value = x86->rcx;
-            break;
-        case RDX:
-            *value = x86->rdx;
-            break;
-        case RBP:
-            *value = x86->rbp;
-            break;
-        case RSI:
-            *value = x86->rsi;
-            break;
-        case RDI:
-            *value = x86->rdi;
-            break;
-        case RSP:
-            *value = x86->rsp;
-            break;
-        case R8:
-            *value = x86->r8;
-            break;
-        case R9:
-            *value = x86->r9;
-            break;
-        case R10:
-            *value = x86->r10;
-            break;
-        case R11:
-            *value = x86->r11;
-            break;
-        case R12:
-            *value = x86->r12;
-            break;
-        case R13:
-            *value = x86->r13;
-            break;
-        case R14:
-            *value = x86->r14;
-            break;
-        case R15:
-            *value = x86->r15;
-            break;
-        case RIP:
-            *value = x86->rip;
-            break;
-        case RFLAGS:
-            *value = x86->rflags;
-            break;
-        case CR0:
-            *value = x86->cr0;
-            break;
-        case CR2:
-            *value = x86->cr2;
-            break;
-        case CR3:
-            *value = x86->cr3;
-            break;
-        case CR4:
-            *value = x86->cr4;
-            break;
-        case CS_SEL:
-            *value = x86->cs_sel;
-            break;
-        case DS_SEL:
-            *value = x86->ds_sel;
-            break;
-        case ES_SEL:
-            *value = x86->es_sel;
-            break;
-        case FS_SEL:
-            *value = x86->fs_sel;
-            break;
-        case GS_SEL:
-            *value = x86->gs_sel;
-            break;
-        case SS_SEL:
-            *value = x86->ss_sel;
-            break;
-        case TR_SEL:
-            *value = x86->tr_sel;
-            break;
-        case LDTR_SEL:
-            *value = x86->ldt_sel;
-            break;
-        case CS_LIMIT:
-            *value = x86->cs_limit;
-            break;
-        case DS_LIMIT:
-            *value = x86->ds_limit;
-            break;
-        case ES_LIMIT:
-            *value = x86->es_limit;
-            break;
-        case FS_LIMIT:
-            *value = x86->fs_limit;
-            break;
-        case GS_LIMIT:
-            *value = x86->gs_limit;
-            break;
-        case SS_LIMIT:
-            *value = x86->ss_limit;
-            break;
-        case TR_LIMIT:
-            *value = x86->tr_limit;
-            break;
-        case LDTR_LIMIT:
-            *value = x86->ldt_limit;
-            break;
-        case IDTR_LIMIT:
-            *value = x86->idtr_limit;
-            break;
-        case GDTR_LIMIT:
-            *value = x86->gdtr_limit;
-            break;
-        case CS_BASE:
-            *value = x86->cs_base;
-            break;
-        case DS_BASE:
-            *value = x86->ds_base;
-            break;
-        case ES_BASE:
-            *value = x86->es_base;
-            break;
-        case FS_BASE:
-            *value = x86->fs_base;
-            break;
-        case GS_BASE:
-            *value = x86->gs_base;
-            break;
-        case SS_BASE:
-            *value = x86->ss_base;
-            break;
-        case TR_BASE:
-            *value = x86->tr_base;
-            break;
-        case LDTR_BASE:
-            *value = x86->ldt_base;
-            break;
-        case IDTR_BASE:
-            *value = x86->idtr_base;
-            break;
-        case GDTR_BASE:
-            *value = x86->gdtr_base;
-            break;
-        case SYSENTER_CS:
-            *value = x86->sysenter_cs;
-            break;
-        case SYSENTER_ESP:
-            *value = x86->sysenter_esp;
-            break;
-        case SYSENTER_EIP:
-            *value = x86->sysenter_eip;
-            break;
-        case MSR_LSTAR:
-            *value = x86->msr_lstar;
-            break;
-        case MSR_EFER:
-            *value = x86->msr_efer;
-            break;
-        case MSR_STAR:
-            *value = x86->msr_star;
-            break;
-        default:
-            dbprint(VMI_DEBUG_DRIVER, "--libmicrovmi: register %"PRIu64" is not available\n", reg);
-            return VMI_FAILURE;
-    }
+    const uint64_t *field = x86_reg_field(&regs.x86, reg);
+    if (!field)
+        return VMI_FAILURE;
+    *value = *field;
     return VMI_SUCCESS;
+}
+
+/* What Xen and KVM apply from an event's SET_REGISTERS reply */
+static void
+gprs_to_microvmi(const x86_registers_t *x86, X86Registers *r)
+{
+    r->rax = x86->rax;
+    r->rbx = x86->rbx;
+    r->rcx = x86->rcx;
+    r->rdx = x86->rdx;
+    r->rsi = x86->rsi;
+    r->rdi = x86->rdi;
+    r->rsp = x86->rsp;
+    r->rbp = x86->rbp;
+    r->r8 = x86->r8;
+    r->r9 = x86->r9;
+    r->r10 = x86->r10;
+    r->r11 = x86->r11;
+    r->r12 = x86->r12;
+    r->r13 = x86->r13;
+    r->r14 = x86->r14;
+    r->r15 = x86->r15;
+    r->rip = x86->rip;
+    r->rflags = x86->rflags;
+}
+
+/*
+ * Writes the fields microvmi_to_x86 fills over current, the vCPU's registers read just before, and
+ * writes the result: segment attributes and the APIC base keep their value. Fails on a selector
+ * or limit wider than libmicrovmi's.
+ */
+static status_t
+microvmi_write_x86(vmi_instance_t vmi, Registers *current, const x86_registers_t *x86, uint16_t vcpu)
+{
+    X86Registers *r = &current->x86;
+    gprs_to_microvmi(x86, r);
+    r->cr0 = x86->cr0;
+    r->cr2 = x86->cr2;
+    r->cr3 = x86->cr3;
+    r->cr4 = x86->cr4;
+    r->sysenter_cs = x86->sysenter_cs;
+    r->sysenter_esp = x86->sysenter_esp;
+    r->sysenter_eip = x86->sysenter_eip;
+    // libmicrovmi has EFER twice and refuses a write where they differ
+    r->msr_efer = x86->msr_efer;
+    r->efer = x86->msr_efer;
+    r->msr_star = x86->msr_star;
+    r->msr_lstar = x86->msr_lstar;
+#define SEGMENT(lv, mv) \
+    if (x86->lv##_limit > UINT32_MAX || x86->lv##_sel > UINT16_MAX) \
+        return VMI_FAILURE; \
+    r->mv.base = x86->lv##_base; \
+    r->mv.limit = (uint32_t) x86->lv##_limit; \
+    r->mv.selector = (uint16_t) x86->lv##_sel
+    SEGMENT(cs, cs);
+    SEGMENT(ds, ds);
+    SEGMENT(es, es);
+    SEGMENT(fs, fs);
+    SEGMENT(gs, gs);
+    SEGMENT(ss, ss);
+    SEGMENT(tr, tr);
+    SEGMENT(ldt, ldt);
+#undef SEGMENT
+    if (x86->idtr_limit > UINT16_MAX || x86->gdtr_limit > UINT16_MAX)
+        return VMI_FAILURE;
+    r->idt.base = x86->idtr_base;
+    r->idt.limit = (uint16_t) x86->idtr_limit;
+    r->gdt.base = x86->gdtr_base;
+    r->gdt.limit = (uint16_t) x86->gdtr_limit;
+    return microvmi_write_registers(microvmi_get_instance(vmi)->ctx, vcpu, current) ? VMI_SUCCESS : VMI_FAILURE;
+}
+
+static status_t
+microvmi_set_vcpuregs(vmi_instance_t vmi, registers_t *regs, unsigned long vcpu)
+{
+    Registers current;
+    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu, &current))
+        return VMI_FAILURE;
+    return microvmi_write_x86(vmi, &current, &regs->x86, (uint16_t) vcpu);
+}
+
+static status_t
+microvmi_set_vcpureg(vmi_instance_t vmi, uint64_t value, reg_t reg, unsigned long vcpu)
+{
+    Registers current;
+    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu, &current))
+        return VMI_FAILURE;
+
+    x86_registers_t x86;
+    microvmi_to_x86(&current.x86, &x86);
+    uint64_t *field = x86_reg_field(&x86, reg);
+    if (!field)
+        return VMI_FAILURE;
+    *field = value;
+    return microvmi_write_x86(vmi, &current, &x86, (uint16_t) vcpu);
 }
 
 static void *
@@ -1046,6 +1099,7 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     // a register write cannot be denied: like KVM, DENY is ignored and the write proceeds.
     // NEXT_SLAT_ID (Xen's fast single step) stays unhandled: the vCPU keeps its view
     event_response_t handled = VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP | VMI_EVENT_RESPONSE_SLAT_ID
+                               | VMI_EVENT_RESPONSE_SET_REGISTERS
                                | (reg ? VMI_EVENT_RESPONSE_DENY : 0)
                                | (breakpoint ? VMI_EVENT_RESPONSE_SET_EMUL_INSN : 0)
                                | (pagefault ? VMI_EVENT_RESPONSE_EMULATE | VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA : 0);
@@ -1057,6 +1111,21 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
             status = microvmi_set_single_step(vmi, vcpu, !microvmi->sstep_on[vcpu]);
         else
             status = VMI_FAILURE;
+    }
+    // Like Xen and KVM, only the GPRs, RIP and RFLAGS: injectors reply with full snapshots taken
+    // earlier, maybe on another vCPU, whose per-CPU state (TR base, CR3) must not be loaded.
+    // regs.x86, not libvmi_event->x86_regs: SET_EMUL_* responses overwrite that pointer
+    if (response & VMI_EVENT_RESPONSE_SET_REGISTERS) {
+        Registers current;
+        bool written = microvmi_read_registers(microvmi->ctx, vcpu, &current);
+        if (written) {
+            gprs_to_microvmi(&regs.x86, &current.x86);
+            written = microvmi_write_registers(microvmi->ctx, vcpu, &current);
+        }
+        if (!written) {
+            errprint("libmicrovmi: failed to write the registers of vCPU %"PRIu16" at an event\n", vcpu);
+            status = VMI_FAILURE;
+        }
     }
 
     // emul_insn and emul_read share a union with x86_regs: read them before clearing it
@@ -1343,6 +1412,8 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.get_memsize_ptr = &microvmi_get_memsize;
     driver.get_vcpureg_ptr = &microvmi_get_vcpureg;
     driver.get_vcpuregs_ptr = &microvmi_get_vcpuregs;
+    driver.set_vcpureg_ptr = &microvmi_set_vcpureg;
+    driver.set_vcpuregs_ptr = &microvmi_set_vcpuregs;
     driver.read_page_ptr = &microvmi_read_page;
     driver.write_ptr = &microvmi_write;
     driver.is_pv_ptr = &microvmi_is_pv;
