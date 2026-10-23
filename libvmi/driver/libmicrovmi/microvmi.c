@@ -1047,6 +1047,9 @@ microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType 
         case EventReplyType_Continue:
             reply.continue_.view = view;
             break;
+        case EventReplyType_FastSingleStep:
+            reply.fast_single_step.immediate_view = view;
+            break;
         case EventReplyType_Emulate:
             reply.emulate.view = view;
             break;
@@ -1205,8 +1208,8 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
 
     status_t status = VMI_SUCCESS;
     // a register write cannot be denied: like KVM, DENY is ignored and the write proceeds.
-    // NEXT_SLAT_ID (Xen's fast single step) stays unhandled: the vCPU keeps its view
     event_response_t handled = VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP | VMI_EVENT_RESPONSE_SLAT_ID
+                               | VMI_EVENT_RESPONSE_NEXT_SLAT_ID
                                | VMI_EVENT_RESPONSE_SET_REGISTERS
                                | (reg ? VMI_EVENT_RESPONSE_DENY : 0)
                                | (breakpoint ? VMI_EVENT_RESPONSE_SET_EMUL_INSN : 0)
@@ -1266,6 +1269,18 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         reply.tag = EventReplyType_EmulateNoWrite;
     }
     uint16_t view = (response & VMI_EVENT_RESPONSE_SLAT_ID) ? libvmi_event->slat_id : KEEP_MEMORY_VIEW;
+    if (response & VMI_EVENT_RESPONSE_NEXT_SLAT_ID) {
+        if (response & (VMI_EVENT_RESPONSE_SET_EMUL_INSN | VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA
+                        | VMI_EVENT_RESPONSE_EMULATE | VMI_EVENT_RESPONSE_EMULATE_NOWRITE)) {
+            errprint("libmicrovmi: fast single-step cannot be combined with emulation\n");
+            status = VMI_FAILURE;
+        } else {
+            reply.tag = EventReplyType_FastSingleStep;
+            reply.fast_single_step.next_view = libvmi_event->next_slat_id;
+            if (!(response & VMI_EVENT_RESPONSE_SLAT_ID))
+                view = event->view;
+        }
+    }
     libvmi_event->x86_regs = NULL;
     // reply even if toggling failed: the vCPU must not stay parked
     if (VMI_FAILURE == microvmi_reply_with(microvmi, event, reply, view))
