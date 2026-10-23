@@ -20,6 +20,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include <libmicrovmi.h>
 
@@ -174,6 +175,46 @@ static void
 microvmi_release_memory(vmi_instance_t UNUSED(vmi), void *memory, size_t UNUSED(length))
 {
     g_free(memory);
+}
+
+// Unlike Xen's shared mapping, these pages are a snapshot; writes do not reach the guest.
+static void *
+microvmi_mmap_guest(vmi_instance_t vmi, unsigned long *pfns, unsigned int count, int prot)
+{
+    const size_t page_size = vmi->page_size;
+    if (!count || !page_size || page_size > 65536 || count > SIZE_MAX / page_size)
+        return NULL;
+
+    size_t length = (size_t) count * page_size;
+    uint8_t *mapping = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (mapping == MAP_FAILED)
+        return NULL;
+
+    for (unsigned int i = 0; i < count;) {
+        if ((uint64_t) pfns[i] > (UINT64_MAX >> vmi->page_shift))
+            goto failed;
+        unsigned int pages = 1;
+        while (pages < count - i && pages < 65536 / page_size
+                && pfns[i + pages] > pfns[i] && pfns[i + pages] - pfns[i] == pages)
+            pages++;
+
+        size_t bytes = pages * page_size;
+        uint64_t bytes_read = 0;
+        if (!microvmi_read_physical(microvmi_get_instance(vmi)->ctx,
+                                    (uint64_t) pfns[i] << vmi->page_shift,
+                                    mapping + (size_t) i * page_size, bytes, &bytes_read)
+                || bytes_read != bytes)
+            goto failed;
+        i += pages;
+    }
+
+    if (mprotect(mapping, length, prot) != 0)
+        goto failed;
+    return mapping;
+
+failed:
+    munmap(mapping, length);
+    return NULL;
 }
 
 static status_t
@@ -1439,6 +1480,7 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.set_vcpureg_ptr = &microvmi_set_vcpureg;
     driver.set_vcpuregs_ptr = &microvmi_set_vcpuregs;
     driver.read_page_ptr = &microvmi_read_page;
+    driver.mmap_guest = &microvmi_mmap_guest;
     driver.write_ptr = &microvmi_write;
     driver.is_pv_ptr = &microvmi_is_pv;
     driver.pause_vm_ptr = &microvmi_pause_vm;

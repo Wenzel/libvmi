@@ -1443,6 +1443,8 @@ status_t vmi_read_va(
  * Each page will have it's own pointer in access_ptrs output array. Be aware that
  * not all virtual pages may be allocated and in such case, the corresponding array item
  * will be set to NULL. Remember to call munmap() on each array item afterwards.
+ * The libmicrovmi driver returns a private snapshot: changes to a writable mapping
+ * do not write back to the guest. Use vmi_write() to modify guest memory.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] ctx Access context
@@ -1462,6 +1464,7 @@ status_t vmi_mmap_guest(
  * Maps the physical memory pages of the guest listed in pfns into the host
  * Each page will have it's own pointer in access_ptrs output array.
  * Remember to call munmap() on each array item afterwards.
+ * The libmicrovmi driver returns a private snapshot, not a write-through mapping.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] pfns Array of size [num_pages] containing guest's page frame numbers to map
@@ -1482,6 +1485,7 @@ vmi_mmap_guest_pfns(
  * Maps num_pages of the guest's physical memory into host, starting at the provided paddr.
  * Each page will have it's own pointer in access_ptrs output array.
  * Remember to call munmap() on each array item afterwards.
+ * The libmicrovmi driver returns a private snapshot, not a write-through mapping.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] paddr Physical address to map
