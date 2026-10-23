@@ -1093,6 +1093,7 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     uint16_t vcpu = event->vcpu;
     bool breakpoint = event->kind.tag == EventType_Breakpoint;
     bool reg = event->kind.tag == EventType_Cr || event->kind.tag == EventType_Msr;
+    bool debug = event->kind.tag == EventType_Debug;
     bool pagefault = event->kind.tag == EventType_Pagefault;
     vmi_mem_access_t out_access = VMI_MEMACCESS_INVALID;
     vmi_event_t *libvmi_event = NULL;
@@ -1185,7 +1186,7 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         libvmi_event->debug_event.offset = regs.x86.rip & VMI_BIT_MASK(0, 11);
         libvmi_event->debug_event.gla = regs.x86.rip;
         libvmi_event->debug_event.insn_length = 0;  // Unknown at the event
-        libvmi_event->debug_event.type = 0;  // Type field unused for #DB
+        libvmi_event->debug_event.type = 3;  // HVMOP_TRAP_hw_exc for #DB
         libvmi_event->debug_event.reinject = 1;  // Reinject by default
     } else if (pagefault) {
         libvmi_event->mem_event.gfn = event->kind.pagefault.gpa >> vmi->page_shift;
@@ -1236,9 +1237,14 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     }
 
     // emul_insn and emul_read share a union with x86_regs: read them before clearing it
+    bool reinject = false;
+    if (breakpoint)
+        reinject = libvmi_event->interrupt_event.reinject == 1;
+    else if (debug)
+        reinject = libvmi_event->debug_event.reinject == 1;
     EventReplyType reply = {
         .tag = EventReplyType_Continue,
-        .continue_ = { .reinject = breakpoint && libvmi_event->interrupt_event.reinject == 1 },
+        .continue_ = { .reinject = reinject }
     };
     if (breakpoint && (response & VMI_EVENT_RESPONSE_SET_EMUL_INSN) && libvmi_event->emul_insn) {
         // the supplied instruction replaces the int3: reinject is dropped
