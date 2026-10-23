@@ -40,6 +40,7 @@ typedef struct microvmi_instance {
     bool intr_on;    // Breakpoint intercept set on every vCPU
     bool *sstep_on;  // per vCPU: Singlestep intercept set, toggled by VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP
     bool pf_on;      // Pagefault (page-access) intercept set on every vCPU, while pages are restricted
+    bool cpuid_on;   // CPUID intercept set on every vCPU
     bool views_on;   // Memory views enabled (LibVMI's alternate SLAT)
     GHashTable *restricted;  // (view, GFN) pages whose access this client restricted, restored at shutdown
 } microvmi_instance_t;
@@ -693,8 +694,8 @@ microvmi_resume_vm(vmi_instance_t vmi)
 }
 
 /*
- * VMI events, modelled on LibVMI's KVM driver: INT3, single step, CR0/CR3/CR4 and MSR writes,
- * page access (memory events).
+ * VMI events, modelled on LibVMI's KVM driver: INT3, single step, CPUID,
+ * CR0/CR3/CR4 and MSR writes, page access (memory events).
  * Events-pending stays unimplemented: LibVMI then drains with a zero-timeout listen.
  * Register Intercepts need no driver state: LibVMI's reg_events/msr_events tables hold exactly
  * the events whose Intercepts are set (an event whose clear failed stays there for shutdown).
@@ -803,8 +804,8 @@ microvmi_toggle_intercept_all(vmi_instance_t vmi, InterceptType intercept, bool 
         if (microvmi_toggle_intercept(microvmi->ctx, (uint16_t) vcpu, intercept, enabled))
             continue;
         errprint("libmicrovmi: failed to %s the %s intercept on vCPU %u\n", enabled ? "set" : "clear",
-                 intercept.tag == InterceptType_Cr ? "CR" : intercept.tag == InterceptType_Msr ? "MSR" : "page-access",
-                 vcpu);
+                 intercept.tag == InterceptType_Cr ? "CR" : intercept.tag == InterceptType_Msr ? "MSR"
+                 : intercept.tag == InterceptType_Cpuid ? "CPUID" : "page-access", vcpu);
         status = VMI_FAILURE;
         if (!enabled)
             continue;
@@ -898,6 +899,19 @@ microvmi_set_reg_access(vmi_instance_t vmi, reg_event_t *event)
         }
         break;
     }
+    return status;
+}
+
+static status_t
+microvmi_set_cpuid_event(vmi_instance_t vmi, bool enabled)
+{
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    InterceptType cpuid = { .tag = InterceptType_Cpuid };
+    status_t status = microvmi_toggle_intercept_all(vmi, cpuid, enabled);
+    if (VMI_SUCCESS == status)
+        microvmi->cpuid_on = enabled;
+    else if (!enabled)
+        microvmi->cpuid_on = true;
     return status;
 }
 
@@ -1087,6 +1101,9 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
                     libvmi_event->reg_event.msr = event->kind.msr.msr_type;
             }
             break;
+        case EventType_Cpuid:
+            libvmi_event = vmi->cpuid_event;
+            break;
         case EventType_Pagefault:
             if (event->kind.pagefault.access & Access_R)
                 out_access |= VMI_MEMACCESS_R;
@@ -1142,6 +1159,10 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         libvmi_event->reg_event.out_access = VMI_REGACCESS_W;
         libvmi_event->reg_event.value = event->kind.msr.value;
         libvmi_event->reg_event.previous = event->kind.msr.old;
+    } else if (event->kind.tag == EventType_Cpuid) {
+        libvmi_event->cpuid_event.leaf = event->kind.cpuid.leaf;
+        libvmi_event->cpuid_event.subleaf = event->kind.cpuid.subleaf;
+        libvmi_event->cpuid_event.insn_length = event->kind.cpuid.insn_len;
     } else if (pagefault) {
         libvmi_event->mem_event.gfn = event->kind.pagefault.gpa >> vmi->page_shift;
         libvmi_event->mem_event.offset = event->kind.pagefault.gpa & VMI_BIT_MASK(0, 11);
@@ -1450,6 +1471,8 @@ microvmi_events_destroy(vmi_instance_t vmi)
         g_hash_table_foreach(vmi->reg_events, microvmi_clear_reg_event, vmi);
     if (vmi->msr_events)
         g_hash_table_foreach(vmi->msr_events, microvmi_clear_reg_event, vmi);
+    if (microvmi->cpuid_on)
+        microvmi_set_cpuid_event(vmi, false);
     // Disabling Memory views lifts every restriction and returns every vCPU to the Default view
     if (microvmi->views_on && VMI_SUCCESS != microvmi_slat_control(vmi, false))
         errprint("libmicrovmi: failed to disable Memory views\n");
@@ -1489,6 +1512,7 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.set_intr_access_ptr = &microvmi_set_intr_access;
     driver.set_reg_access_ptr = &microvmi_set_reg_access;
     driver.set_mem_access_ptr = &microvmi_set_mem_access;
+    driver.set_cpuid_event_ptr = &microvmi_set_cpuid_event;
     driver.set_mem_access_range_ptr = &microvmi_set_mem_access_range;
     driver.clear_generic_mem_access_ptr = &microvmi_clear_generic_mem_access;
     driver.start_single_step_ptr = &microvmi_start_single_step;
