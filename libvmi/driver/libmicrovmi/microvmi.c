@@ -41,6 +41,7 @@ typedef struct microvmi_instance {
     bool *sstep_on;  // per vCPU: Singlestep intercept set, toggled by VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP
     bool pf_on;      // Pagefault (page-access) intercept set on every vCPU, while pages are restricted
     bool cpuid_on;   // CPUID intercept set on every vCPU
+    bool debug_on;   // Debug exception intercept set on every vCPU
     bool views_on;   // Memory views enabled (LibVMI's alternate SLAT)
     GHashTable *restricted;  // (view, GFN) pages whose access this client restricted, restored at shutdown
 } microvmi_instance_t;
@@ -915,6 +916,19 @@ microvmi_set_cpuid_event(vmi_instance_t vmi, bool enabled)
     return status;
 }
 
+static status_t
+microvmi_set_debug_event(vmi_instance_t vmi, bool enabled)
+{
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    InterceptType debug = { .tag = InterceptType_Debug };
+    status_t status = microvmi_toggle_intercept_all(vmi, debug, enabled);
+    if (VMI_SUCCESS == status)
+        microvmi->debug_on = enabled;
+    else if (!enabled)
+        microvmi->debug_on = true;
+    return status;
+}
+
 // clear the page-access Intercept once no page is restricted in any view
 static void
 microvmi_pf_update(vmi_instance_t vmi)
@@ -1104,6 +1118,9 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         case EventType_Cpuid:
             libvmi_event = vmi->cpuid_event;
             break;
+        case EventType_Debug:
+            libvmi_event = vmi->debug_event;
+            break;
         case EventType_Pagefault:
             if (event->kind.pagefault.access & Access_R)
                 out_access |= VMI_MEMACCESS_R;
@@ -1163,6 +1180,13 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         libvmi_event->cpuid_event.leaf = event->kind.cpuid.leaf;
         libvmi_event->cpuid_event.subleaf = event->kind.cpuid.subleaf;
         libvmi_event->cpuid_event.insn_length = event->kind.cpuid.insn_len;
+    } else if (event->kind.tag == EventType_Debug) {
+        libvmi_event->debug_event.gfn = regs.x86.rip >> vmi->page_shift;
+        libvmi_event->debug_event.offset = regs.x86.rip & VMI_BIT_MASK(0, 11);
+        libvmi_event->debug_event.gla = regs.x86.rip;
+        libvmi_event->debug_event.insn_length = 0;  // Unknown at the event
+        libvmi_event->debug_event.type = 0;  // Type field unused for #DB
+        libvmi_event->debug_event.reinject = 1;  // Reinject by default
     } else if (pagefault) {
         libvmi_event->mem_event.gfn = event->kind.pagefault.gpa >> vmi->page_shift;
         libvmi_event->mem_event.offset = event->kind.pagefault.gpa & VMI_BIT_MASK(0, 11);
@@ -1473,6 +1497,8 @@ microvmi_events_destroy(vmi_instance_t vmi)
         g_hash_table_foreach(vmi->msr_events, microvmi_clear_reg_event, vmi);
     if (microvmi->cpuid_on)
         microvmi_set_cpuid_event(vmi, false);
+    if (microvmi->debug_on)
+        microvmi_set_debug_event(vmi, false);
     // Disabling Memory views lifts every restriction and returns every vCPU to the Default view
     if (microvmi->views_on && VMI_SUCCESS != microvmi_slat_control(vmi, false))
         errprint("libmicrovmi: failed to disable Memory views\n");
@@ -1513,6 +1539,7 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.set_reg_access_ptr = &microvmi_set_reg_access;
     driver.set_mem_access_ptr = &microvmi_set_mem_access;
     driver.set_cpuid_event_ptr = &microvmi_set_cpuid_event;
+    driver.set_debug_event_ptr = &microvmi_set_debug_event;
     driver.set_mem_access_range_ptr = &microvmi_set_mem_access_range;
     driver.clear_generic_mem_access_ptr = &microvmi_clear_generic_mem_access;
     driver.start_single_step_ptr = &microvmi_start_single_step;
