@@ -333,6 +333,8 @@ microvmi_to_x86(const X86Registers *r, x86_registers_t *x86)
     x86->msr_efer = r->msr_efer;
     x86->msr_star = r->msr_star;
     x86->msr_lstar = r->msr_lstar;
+    x86->msr_cstar = r->msr_cstar;
+    x86->shadow_gs = r->shadow_gs_base;
 #define SEGMENT(lv, mv) \
     x86->lv##_base = r->mv.base; \
     x86->lv##_limit = r->mv.limit; \
@@ -481,6 +483,10 @@ x86_reg_field(x86_registers_t *x86, reg_t reg)
             return &x86->msr_efer;
         case MSR_STAR:
             return &x86->msr_star;
+        case MSR_CSTAR:
+            return &x86->msr_cstar;
+        case MSR_SHADOW_GS_BASE:
+            return &x86->shadow_gs;
         default:
             dbprint(VMI_DEBUG_DRIVER, "--libmicrovmi: register %"PRIu64" is not available\n", reg);
             return NULL;
@@ -547,6 +553,8 @@ microvmi_write_x86(vmi_instance_t vmi, Registers *current, const x86_registers_t
     r->efer = x86->msr_efer;
     r->msr_star = x86->msr_star;
     r->msr_lstar = x86->msr_lstar;
+    r->msr_cstar = x86->msr_cstar;
+    r->shadow_gs_base = x86->shadow_gs;
 #define SEGMENT(lv, mv) \
     if (x86->lv##_limit > UINT32_MAX || x86->lv##_sel > UINT16_MAX) \
         return VMI_FAILURE; \
