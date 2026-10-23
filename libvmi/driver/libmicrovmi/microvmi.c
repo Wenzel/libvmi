@@ -971,6 +971,9 @@ microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType 
         case EventReplyType_Emulate:
             reply.emulate.view = view;
             break;
+        case EventReplyType_EmulateNoWrite:
+            reply.emulate_no_write.view = view;
+            break;
         case EventReplyType_EmulateReadData:
             reply.emulate_read_data.view = view;
             break;
@@ -1110,7 +1113,7 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
                                | VMI_EVENT_RESPONSE_SET_REGISTERS
                                | (reg ? VMI_EVENT_RESPONSE_DENY : 0)
                                | (breakpoint ? VMI_EVENT_RESPONSE_SET_EMUL_INSN : 0)
-                               | (pagefault ? VMI_EVENT_RESPONSE_EMULATE | VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA : 0);
+                               | (pagefault ? VMI_EVENT_RESPONSE_EMULATE | VMI_EVENT_RESPONSE_EMULATE_NOWRITE | VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA : 0);
     if (response & ~handled)
         errprint("libmicrovmi driver: unhandled event responses 0x%"PRIx32"\n", (uint32_t) (response & ~handled));
     if (response & VMI_EVENT_RESPONSE_TOGGLE_SINGLESTEP) {
@@ -1157,6 +1160,8 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
             free(libvmi_event->emul_read);
     } else if (pagefault && (response & VMI_EVENT_RESPONSE_EMULATE)) {
         reply.tag = EventReplyType_Emulate;
+    } else if (pagefault && (response & VMI_EVENT_RESPONSE_EMULATE_NOWRITE)) {
+        reply.tag = EventReplyType_EmulateNoWrite;
     }
     uint16_t view = (response & VMI_EVENT_RESPONSE_SLAT_ID) ? libvmi_event->slat_id : KEEP_MEMORY_VIEW;
     libvmi_event->x86_regs = NULL;
