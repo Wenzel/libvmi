@@ -2497,7 +2497,8 @@ unsigned int vmi_get_num_vcpus (
  * @param[in] vmi LibVMI instance
  * @param[in] vcpu The index of the VCPU to access, use 0 for single VCPU systems
  * @param[in] virtual_address The cr2 address for requested page fault
- * @param[in] error_code The error code for the requested page fault. ~0u means 'ignore'
+ * @param[in] error_code The page fault error code. The libmicrovmi driver passes it
+ *                       unchanged to the backend; ~0u is not an ignore sentinel here.
  * @return VMI_SUCCESS or VMI_FAILURE
  */
 status_t

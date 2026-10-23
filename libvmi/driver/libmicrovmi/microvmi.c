@@ -301,6 +301,16 @@ microvmi_get_memsize(vmi_instance_t vmi, uint64_t *allocated_ram_size, addr_t *m
     return VMI_SUCCESS;
 }
 
+static status_t
+microvmi_request_pf(vmi_instance_t vmi, unsigned long vcpu, uint64_t virtual_address, uint32_t error_code)
+{
+    if (vcpu > UINT16_MAX || vcpu >= vmi->num_vcpus)
+        return VMI_FAILURE;
+
+    return microvmi_request_page_fault(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu,
+                                      virtual_address, error_code) ? VMI_SUCCESS : VMI_FAILURE;
+}
+
 static void
 microvmi_to_x86(const X86Registers *r, x86_registers_t *x86)
 {
@@ -1423,6 +1433,7 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.get_name_ptr = &microvmi_get_name;
     driver.set_name_ptr = &microvmi_set_name;
     driver.get_memsize_ptr = &microvmi_get_memsize;
+    driver.request_page_fault_ptr = &microvmi_request_pf;
     driver.get_vcpureg_ptr = &microvmi_get_vcpureg;
     driver.get_vcpuregs_ptr = &microvmi_get_vcpuregs;
     driver.set_vcpureg_ptr = &microvmi_set_vcpureg;
