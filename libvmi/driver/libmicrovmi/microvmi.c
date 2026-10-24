@@ -31,7 +31,7 @@
 #include "driver/libmicrovmi/microvmi.h"
 #include "msr-index.h"
 
-// shortcut: memflow connector is fixed, add init data for it when someone needs another connector
+// memflow connector without VMI_INIT_DATA_MEMFLOW_CONNECTOR
 #define DEFAULT_MEMFLOW_CONNECTOR "qemu_procfs"
 
 typedef struct microvmi_instance {
@@ -44,6 +44,8 @@ typedef struct microvmi_instance {
     bool debug_on;   // Debug exception intercept set on every vCPU
     bool views_on;   // Memory views enabled (LibVMI's alternate SLAT)
     GHashTable *restricted;  // (view, GFN) pages whose access this client restricted, restored at shutdown
+    GHashTable *converting;  // (view, GFN) restricted pages set W2X or RWX2N: their access changes at the first fault
+    unsigned int pauses;     // vmi_pause_vm calls not yet resumed: VBoxVMI's pause is not counted
     registers_t *cached_regs;  // per-vCPU cached registers for parked vCPUs
     bool *regs_cached;         // per-vCPU: registers are cached
 } microvmi_instance_t;
@@ -117,6 +119,9 @@ microvmi_open(
                     break;
                 case VMI_INIT_DATA_VBOX_SOCKET:
                     params.virtualbox.socket_path = (char *) init_data->entry[i].data;
+                    break;
+                case VMI_INIT_DATA_MEMFLOW_CONNECTOR:
+                    params.memflow.connector_name = (char *) init_data->entry[i].data;
                     break;
                 default:
                     break;
@@ -238,8 +243,12 @@ failed:
 }
 
 static status_t
-microvmi_init_driver(vmi_instance_t vmi, uint32_t UNUSED(init_flags), vmi_init_data_t *UNUSED(init_data))
+microvmi_init_driver(vmi_instance_t vmi, uint32_t init_flags, vmi_init_data_t *UNUSED(init_data))
 {
+    if (init_flags & VMI_INIT_DOMAINWATCH) {
+        errprint("libmicrovmi cannot watch for VMs (VMI_INIT_DOMAINWATCH)\n");
+        return VMI_FAILURE;
+    }
     vmi->driver.driver_data = g_try_malloc0(sizeof(microvmi_instance_t));
     return vmi->driver.driver_data ? VMI_SUCCESS : VMI_FAILURE;
 }
@@ -284,6 +293,7 @@ microvmi_init_vmi(vmi_instance_t vmi, uint32_t UNUSED(init_flags), vmi_init_data
     if (!microvmi->sstep_on || !microvmi->cached_regs || !microvmi->regs_cached)
         return VMI_FAILURE;
     microvmi->restricted = g_hash_table_new(g_direct_hash, g_direct_equal);
+    microvmi->converting = g_hash_table_new(g_direct_hash, g_direct_equal);
 
     // age 1, like the KVM driver: pages are copies, refresh them on a running guest
     memory_cache_init(vmi, microvmi_get_memory, microvmi_release_memory, 1);
@@ -310,16 +320,25 @@ microvmi_destroy_driver(vmi_instance_t vmi)
     g_free(microvmi->regs_cached);
     if (microvmi->restricted)
         g_hash_table_destroy(microvmi->restricted);
+    if (microvmi->converting)
+        g_hash_table_destroy(microvmi->converting);
     g_free(microvmi->name);
     g_free(microvmi);
     vmi->driver.driver_data = NULL;
 }
 
-// libmicrovmi addresses VMs by name: the domain id is a placeholder
+// libmicrovmi addresses VMs by name, which has no numeric id: a hash of it, stable across runs,
+// never 0 nor VMI_INVALID_DOMID
 static uint64_t
-microvmi_get_id_from_name(vmi_instance_t UNUSED(vmi), const char *UNUSED(name))
+microvmi_get_id_from_name(vmi_instance_t UNUSED(vmi), const char *name)
 {
-    return 0;
+    return name ? (uint64_t) g_str_hash(name) + 1 : VMI_INVALID_DOMID;
+}
+
+static uint64_t
+microvmi_get_id(vmi_instance_t vmi)
+{
+    return microvmi_get_id_from_name(vmi, microvmi_get_instance(vmi)->name);
 }
 
 static status_t
@@ -356,13 +375,12 @@ microvmi_set_name(vmi_instance_t vmi, const char *name)
 static status_t
 microvmi_get_memsize(vmi_instance_t vmi, uint64_t *allocated_ram_size, addr_t *max_physical_address)
 {
-    uint64_t max_addr = 0;
-    if (!microvmi_get_max_physical_addr(microvmi_get_instance(vmi)->ctx, &max_addr))
+    void *ctx = microvmi_get_instance(vmi)->ctx;
+    if (!microvmi_get_max_physical_addr(ctx, max_physical_address))
         return VMI_FAILURE;
-
-    // shortcut: libmicrovmi has no RAM size call, report the max physical address for both
-    *allocated_ram_size = max_addr;
-    *max_physical_address = max_addr;
+    // shortcut: drivers without a RAM size (all but VBoxVMI) report the max physical address
+    if (!microvmi_get_ram_size(ctx, allocated_ram_size))
+        *allocated_ram_size = *max_physical_address;
     return VMI_SUCCESS;
 }
 
@@ -719,19 +737,32 @@ microvmi_is_pv(vmi_instance_t UNUSED(vmi))
     return 0;
 }
 
+// counted like Xen's pause: a VBoxVMI resume undoes any number of pauses
 static status_t
 microvmi_pause_vm(vmi_instance_t vmi)
 {
-    return microvmi_pause(microvmi_get_instance(vmi)->ctx) ? VMI_SUCCESS : VMI_FAILURE;
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    if (!microvmi->pauses && !microvmi_pause(microvmi->ctx))
+        return VMI_FAILURE;
+    microvmi->pauses++;
+    return VMI_SUCCESS;
 }
 
 static status_t
 microvmi_resume_vm(vmi_instance_t vmi)
 {
-    status_t status = microvmi_resume(microvmi_get_instance(vmi)->ctx) ? VMI_SUCCESS : VMI_FAILURE;
-    if (status == VMI_SUCCESS)
-        microvmi_invalidate_all_regs_cache(microvmi_get_instance(vmi), vmi->num_vcpus);
-    return status;
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+    if (!microvmi->pauses) {
+        dbprint(VMI_DEBUG_DRIVER, "--libmicrovmi: resume without a pause\n");
+        return VMI_FAILURE;
+    }
+    if (microvmi->pauses == 1) {
+        if (!microvmi_resume(microvmi->ctx))
+            return VMI_FAILURE;
+        microvmi_invalidate_all_regs_cache(microvmi, vmi->num_vcpus);
+    }
+    microvmi->pauses--;
+    return VMI_SUCCESS;
 }
 
 /*
@@ -1001,15 +1032,18 @@ microvmi_set_page(vmi_instance_t vmi, uint16_t view, addr_t gfn, Access allowed)
         status = VMI_FAILURE;
     } else if (restricted) {
         g_hash_table_insert(microvmi->restricted, RESTRICTED_KEY(view, gfn), GUINT_TO_POINTER((unsigned int) allowed + 1));
+        g_hash_table_remove(microvmi->converting, RESTRICTED_KEY(view, gfn));
     } else {
         g_hash_table_remove(microvmi->restricted, RESTRICTED_KEY(view, gfn));
+        g_hash_table_remove(microvmi->converting, RESTRICTED_KEY(view, gfn));
     }
 
     microvmi_pf_update(vmi);
     return status;
 }
 
-// LibVMI's denied access onto libmicrovmi's allowed access, as the KVM driver; slat_id is the Memory view
+// LibVMI's denied access onto libmicrovmi's allowed access, as the KVM driver; slat_id is the Memory view.
+// W2X and RWX2N are Xen's rx2rw and n2rwx: the driver changes the access at the first fault
 static status_t
 microvmi_set_mem_access(vmi_instance_t vmi, addr_t gpfn, vmi_mem_access_t page_access_flag, uint16_t slat_id)
 {
@@ -1027,6 +1061,7 @@ microvmi_set_mem_access(vmi_instance_t vmi, addr_t gpfn, vmi_mem_access_t page_a
             allowed = Access_R | Access_W | Access_X;
             break;
         case VMI_MEMACCESS_W:
+        case VMI_MEMACCESS_W2X:
             allowed = Access_R | Access_X;
             break;
         case VMI_MEMACCESS_X:
@@ -1039,13 +1074,19 @@ microvmi_set_mem_access(vmi_instance_t vmi, addr_t gpfn, vmi_mem_access_t page_a
             allowed = Access_R;
             break;
         case VMI_MEMACCESS_RWX:
+        case VMI_MEMACCESS_RWX2N:
             allowed = Access_NIL;
             break;
         default:
             errprint("libmicrovmi driver: invalid memaccess setting requested: %d\n", page_access_flag);
             return VMI_FAILURE;
     }
-    return microvmi_set_page(vmi, slat_id, gpfn, allowed);
+    if (VMI_FAILURE == microvmi_set_page(vmi, slat_id, gpfn, allowed))
+        return VMI_FAILURE;
+    if (page_access_flag == VMI_MEMACCESS_W2X || page_access_flag == VMI_MEMACCESS_RWX2N)
+        g_hash_table_insert(microvmi_get_instance(vmi)->converting, RESTRICTED_KEY(slat_id, gpfn),
+                            GUINT_TO_POINTER(page_access_flag));
+    return VMI_SUCCESS;
 }
 
 // libmicrovmi has no range call: page by page, gpfn_end excluded as on Xen and KVM
@@ -1059,20 +1100,24 @@ microvmi_set_mem_access_range(vmi_instance_t vmi, addr_t gpfn_start, addr_t gpfn
     return VMI_SUCCESS;
 }
 
-// the page's memory event, else the first generic one for the access (KVM calls every matching one)
-static vmi_event_t *
-microvmi_mem_event(vmi_instance_t vmi, addr_t gfn, vmi_mem_access_t out_access)
+// the page's memory event (an RWX2N one for any access), else every generic one for the access,
+// as on Xen and KVM; returns how many it stored in events
+static unsigned int
+microvmi_mem_events(vmi_instance_t vmi, addr_t gfn, vmi_mem_access_t out_access, vmi_event_t **events, unsigned int max)
 {
     vmi_event_t *event = g_hash_table_lookup(vmi->mem_events_on_gfn, GSIZE_TO_POINTER(gfn));
-    if (event && (event->mem_event.in_access & out_access))
-        return event;
+    if (event && (event->mem_event.in_access & (out_access | VMI_MEMACCESS_RWX2N))) {
+        events[0] = event;
+        return 1;
+    }
 
+    unsigned int count = 0;
     GHashTableIter i;
     vmi_mem_access_t *key = NULL;
     ghashtable_foreach(vmi->mem_events_generic, i, &key, &event)
-        if (GPOINTER_TO_UINT(key) & out_access)
-            return event;
-    return NULL;
+        if ((GPOINTER_TO_UINT(key) & out_access) && count < max)
+            events[count++] = event;
+    return count;
 }
 
 // reply in a view (KEEP_MEMORY_VIEW: the Active view) and release the event's vCPU. A refused reply
@@ -1119,7 +1164,8 @@ microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType 
     }
     if (reply.tag != EventReplyType_Continue || view != KEEP_MEMORY_VIEW)
         errprint("libmicrovmi: failed to retry the instruction on vCPU %"PRIu16"\n", vcpu);
-    // shortcut: the C API cannot free an unreplied Event, it leaks; only on a lost connection
+    // only on a lost connection: the vCPU stays parked, the Event is ours to free
+    microvmi_free_event(event);
     return VMI_FAILURE;
 }
 
@@ -1141,7 +1187,10 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     bool debug = event->kind.tag == EventType_Debug;
     bool pagefault = event->kind.tag == EventType_Pagefault;
     vmi_mem_access_t out_access = VMI_MEMACCESS_INVALID;
+    addr_t gfn = 0;
     vmi_event_t *libvmi_event = NULL;
+    vmi_event_t *events[8];  // a page's memory event, or the generic ones: one per access mask
+    unsigned int count = 0;
 
     switch (event->kind.tag) {
         case EventType_Breakpoint:
@@ -1167,27 +1216,38 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         case EventType_Debug:
             libvmi_event = vmi->debug_event;
             break;
-        case EventType_Pagefault:
+        case EventType_Pagefault: {
             if (event->kind.pagefault.access & Access_R)
                 out_access |= VMI_MEMACCESS_R;
             if (event->kind.pagefault.access & Access_W)
                 out_access |= VMI_MEMACCESS_W;
             if (event->kind.pagefault.access & Access_X)
                 out_access |= VMI_MEMACCESS_X;
-            libvmi_event = microvmi_mem_event(vmi, event->kind.pagefault.gpa >> vmi->page_shift, out_access);
+            gfn = event->kind.pagefault.gpa >> vmi->page_shift;
+            // like Xen, a W2X page becomes RW at a write, unreported; an RWX2N one RWX at any access, reported
+            vmi_mem_access_t converting = GPOINTER_TO_UINT(g_hash_table_lookup(microvmi->converting,
+                                          RESTRICTED_KEY(event->view, gfn)));
+            if (converting)
+                microvmi_set_page(vmi, event->view, gfn, converting == VMI_MEMACCESS_W2X
+                                  ? Access_R | Access_W : Access_R | Access_W | Access_X);
+            if (converting != VMI_MEMACCESS_W2X)
+                count = microvmi_mem_events(vmi, gfn, out_access, events, G_N_ELEMENTS(events));
             break;
+        }
         default:
             break;
     }
+    if (libvmi_event)
+        events[count++] = libvmi_event;
 
-    if (!libvmi_event) {
+    if (!count) {
         // raised before its LibVMI event was cleared: let the guest run as if it was not intercepted
         dbprint(VMI_DEBUG_DRIVER, "--libmicrovmi: no LibVMI event for event kind %d on vCPU %"PRIu16"\n",
                 (int) event->kind.tag, vcpu);
         if (pagefault) {
-            Access allowed;
-            if (microvmi_get_page_access(microvmi->ctx, event->view, event->kind.pagefault.gpa, &allowed)
-                && (allowed & event->kind.pagefault.access))
+            // the restricted table holds every restriction: no entry is RWX
+            gpointer allowed = g_hash_table_lookup(microvmi->restricted, RESTRICTED_KEY(event->view, gfn));
+            if (!allowed || ((GPOINTER_TO_UINT(allowed) - 1) & event->kind.pagefault.access))
                 return microvmi_reply(microvmi, event, false);
             // A different event may still restrict the page: let this unmatched access through.
             EventReplyType emulate = { .tag = EventReplyType_Emulate };
@@ -1195,6 +1255,12 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         }
         return microvmi_reply(microvmi, event, breakpoint);
     }
+
+    // onchange: only a write that changes the register, as on Xen
+    if (reg && libvmi_event->reg_event.onchange
+            && (event->kind.tag == EventType_Cr ? event->kind.cr.new_ == event->kind.cr.old
+                : event->kind.msr.value == event->kind.msr.old))
+        return microvmi_reply(microvmi, event, false);
 
     // Use registers from the event if available (VBoxVMI protocol v10+)
     Registers microvmi_regs;
@@ -1212,48 +1278,62 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         microvmi->regs_cached[vcpu] = true;
     }
 
-    libvmi_event->x86_regs = &microvmi->cached_regs[vcpu].x86;
-    libvmi_event->vcpu_id = vcpu;
-    libvmi_event->slat_id = event->view;
-    if (breakpoint) {
-        libvmi_event->interrupt_event.gfn = event->kind.breakpoint.gpa >> vmi->page_shift;
-        libvmi_event->interrupt_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
-        libvmi_event->interrupt_event.gla = microvmi->cached_regs[vcpu].x86.rip;
-        libvmi_event->interrupt_event.insn_length = event->kind.breakpoint.insn_len;
-        // default reinject behavior: invalid, only 1 reinjects
-        libvmi_event->interrupt_event.reinject = -1;
-    } else if (event->kind.tag == EventType_Cr) {
-        libvmi_event->reg_event.out_access = VMI_REGACCESS_W;
-        libvmi_event->reg_event.value = event->kind.cr.new_;
-        libvmi_event->reg_event.previous = event->kind.cr.old;
-    } else if (event->kind.tag == EventType_Msr) {
-        libvmi_event->reg_event.out_access = VMI_REGACCESS_W;
-        libvmi_event->reg_event.value = event->kind.msr.value;
-        libvmi_event->reg_event.previous = event->kind.msr.old;
-    } else if (event->kind.tag == EventType_Cpuid) {
-        libvmi_event->cpuid_event.leaf = event->kind.cpuid.leaf;
-        libvmi_event->cpuid_event.subleaf = event->kind.cpuid.subleaf;
-        libvmi_event->cpuid_event.insn_length = event->kind.cpuid.insn_len;
-    } else if (event->kind.tag == EventType_Debug) {
-        libvmi_event->debug_event.gfn = microvmi->cached_regs[vcpu].x86.rip >> vmi->page_shift;
-        libvmi_event->debug_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
-        libvmi_event->debug_event.gla = microvmi->cached_regs[vcpu].x86.rip;
-        libvmi_event->debug_event.insn_length = 0;  // Unknown at the event
-        libvmi_event->debug_event.type = 3;  // HVMOP_TRAP_hw_exc for #DB
-        libvmi_event->debug_event.reinject = 1;  // Reinject by default
-    } else if (pagefault) {
-        libvmi_event->mem_event.gfn = event->kind.pagefault.gpa >> vmi->page_shift;
-        libvmi_event->mem_event.offset = event->kind.pagefault.gpa & VMI_BIT_MASK(0, 11);
-        libvmi_event->mem_event.gla = event->kind.pagefault.gva;
-        libvmi_event->mem_event.out_access = out_access;
-    } else {
-        libvmi_event->ss_event.gfn = event->kind.singlestep.gpa >> vmi->page_shift;
-        libvmi_event->ss_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
-        libvmi_event->ss_event.gla = microvmi->cached_regs[vcpu].x86.rip;
-    }
-
+    event_response_t response = 0, own = 0;  // all callbacks' responses, the libvmi_event's own
+    libvmi_event = NULL;
     vmi->event_callback = 1;
-    event_response_t response = libvmi_event->callback(vmi, libvmi_event);
+    for (unsigned int i = 0; i < count; i++) {
+        vmi_event_t *e = events[i];
+        e->x86_regs = &microvmi->cached_regs[vcpu].x86;
+        e->vcpu_id = vcpu;
+        e->slat_id = event->view;
+        if (breakpoint) {
+            e->interrupt_event.gfn = event->kind.breakpoint.gpa >> vmi->page_shift;
+            e->interrupt_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
+            e->interrupt_event.gla = microvmi->cached_regs[vcpu].x86.rip;
+            e->interrupt_event.insn_length = event->kind.breakpoint.insn_len;
+            // default reinject behavior: invalid, only 1 reinjects
+            e->interrupt_event.reinject = -1;
+        } else if (event->kind.tag == EventType_Cr) {
+            // only write Intercepts exist
+            e->reg_event.out_access = VMI_REGACCESS_W;
+            e->reg_event.value = event->kind.cr.new_;
+            e->reg_event.previous = event->kind.cr.old;
+        } else if (event->kind.tag == EventType_Msr) {
+            e->reg_event.out_access = VMI_REGACCESS_W;
+            e->reg_event.value = event->kind.msr.value;
+            e->reg_event.previous = event->kind.msr.old;
+        } else if (event->kind.tag == EventType_Cpuid) {
+            e->cpuid_event.leaf = event->kind.cpuid.leaf;
+            e->cpuid_event.subleaf = event->kind.cpuid.subleaf;
+            e->cpuid_event.insn_length = event->kind.cpuid.insn_len;
+        } else if (event->kind.tag == EventType_Debug) {
+            e->debug_event.gfn = microvmi->cached_regs[vcpu].x86.rip >> vmi->page_shift;
+            e->debug_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
+            e->debug_event.gla = microvmi->cached_regs[vcpu].x86.rip;
+            e->debug_event.insn_length = 0;  // Unknown at the event
+            e->debug_event.type = 3;  // HVMOP_TRAP_hw_exc for #DB
+            e->debug_event.reinject = 1;  // Reinject by default
+        } else if (pagefault) {
+            e->mem_event.gfn = gfn;
+            e->mem_event.offset = event->kind.pagefault.gpa & VMI_BIT_MASK(0, 11);
+            e->mem_event.gla = event->kind.pagefault.gva;
+            // VBoxVMI reports a zero gva without a linear address; gptw is not reported, stays 0
+            e->mem_event.gla_valid = event->kind.pagefault.gva != 0;
+            e->mem_event.out_access = out_access;
+        } else {
+            e->ss_event.gfn = event->kind.singlestep.gpa >> vmi->page_shift;
+            e->ss_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
+            e->ss_event.gla = microvmi->cached_regs[vcpu].x86.rip;
+        }
+        event_response_t r = e->callback(vmi, e);
+        // shortcut: of several generic memory events, the last one responding supplies the
+        // response's data (view, emulation data); merge per flag if two ever need different data
+        if (r || !libvmi_event) {
+            libvmi_event = e;
+            own = r;
+        }
+        response |= r;
+    }
     vmi->event_callback = 0;
 
     status_t status = VMI_SUCCESS;
@@ -1301,13 +1381,13 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         .tag = EventReplyType_Continue,
         .continue_ = { .reinject = reinject }
     };
-    if (breakpoint && (response & VMI_EVENT_RESPONSE_SET_EMUL_INSN) && libvmi_event->emul_insn) {
+    if (breakpoint && (own & VMI_EVENT_RESPONSE_SET_EMUL_INSN) && libvmi_event->emul_insn) {
         // the supplied instruction replaces the int3: reinject is dropped
         reply.tag = EventReplyType_EmulateInsn;
         memcpy(reply.emulate_insn.data, libvmi_event->emul_insn->data, sizeof(reply.emulate_insn.data));
         if (!libvmi_event->emul_insn->dont_free)
             free(libvmi_event->emul_insn);
-    } else if (pagefault && (response & VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA) && libvmi_event->emul_read) {
+    } else if (pagefault && (own & VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA) && libvmi_event->emul_read) {
         // like Xen, a size over the buffer is capped
         reply.tag = EventReplyType_EmulateReadData;
         reply.emulate_read_data.size = libvmi_event->emul_read->size < sizeof(reply.emulate_read_data.data)
@@ -1320,8 +1400,8 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     } else if (pagefault && (response & VMI_EVENT_RESPONSE_EMULATE_NOWRITE)) {
         reply.tag = EventReplyType_EmulateNoWrite;
     }
-    uint16_t view = (response & VMI_EVENT_RESPONSE_SLAT_ID) ? libvmi_event->slat_id : KEEP_MEMORY_VIEW;
-    if (response & VMI_EVENT_RESPONSE_NEXT_SLAT_ID) {
+    uint16_t view = (own & VMI_EVENT_RESPONSE_SLAT_ID) ? libvmi_event->slat_id : KEEP_MEMORY_VIEW;
+    if (own & VMI_EVENT_RESPONSE_NEXT_SLAT_ID) {
         if (response & (VMI_EVENT_RESPONSE_SET_EMUL_INSN | VMI_EVENT_RESPONSE_SET_EMUL_READ_DATA
                         | VMI_EVENT_RESPONSE_EMULATE | VMI_EVENT_RESPONSE_EMULATE_NOWRITE)) {
             errprint("libmicrovmi: fast single-step cannot be combined with emulation\n");
@@ -1329,11 +1409,12 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         } else {
             reply.tag = EventReplyType_FastSingleStep;
             reply.fast_single_step.next_view = libvmi_event->next_slat_id;
-            if (!(response & VMI_EVENT_RESPONSE_SLAT_ID))
+            if (!(own & VMI_EVENT_RESPONSE_SLAT_ID))
                 view = event->view;
         }
     }
-    libvmi_event->x86_regs = NULL;
+    for (unsigned int i = 0; i < count; i++)
+        events[i]->x86_regs = NULL;
     // reply even if toggling failed: the vCPU must not stay parked
     if (VMI_FAILURE == microvmi_reply_with(microvmi, event, reply, view))
         status = VMI_FAILURE;
@@ -1441,6 +1522,7 @@ microvmi_clear_generic_mem_access(vmi_instance_t vmi, vmi_mem_access_t removed)
         Access allowed = original | (full & ~remaining);
         if (allowed == original)
             continue;
+        g_hash_table_remove(microvmi->converting, key);
         if (allowed == full)
             g_hash_table_iter_remove(&iter);
         else
@@ -1476,8 +1558,10 @@ microvmi_forget_view(vmi_instance_t vmi, uint16_t view)
 
     g_hash_table_iter_init(&iter, microvmi->restricted);
     while (g_hash_table_iter_next(&iter, &key, NULL))
-        if (RESTRICTED_VIEW(key) == view)
+        if (RESTRICTED_VIEW(key) == view) {
+            g_hash_table_remove(microvmi->converting, key);
             g_hash_table_iter_remove(&iter);
+        }
     microvmi_pf_update(vmi);
 }
 
@@ -1500,6 +1584,7 @@ microvmi_slat_control(vmi_instance_t vmi, bool state)
     // restriction, the Default view's included
     if (!state) {
         g_hash_table_remove_all(microvmi->restricted);
+        g_hash_table_remove_all(microvmi->converting);
         microvmi_pf_update(vmi);
     }
     return VMI_SUCCESS;
@@ -1597,6 +1682,7 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.init_vmi_ptr = &microvmi_init_vmi;
     driver.destroy_ptr = &microvmi_destroy_driver;
     driver.get_id_from_name_ptr = &microvmi_get_id_from_name;
+    driver.get_id_ptr = &microvmi_get_id;
     driver.check_id_ptr = &microvmi_check_id;
     driver.set_id_ptr = &microvmi_set_id;
     driver.get_name_ptr = &microvmi_get_name;

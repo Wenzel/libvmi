@@ -234,8 +234,10 @@ typedef enum {
     VMI_INIT_DATA_VBOX_ACCESS_METHOD, /**< VirtualBox access method: a vmi_vbox_access_method_t
                                            cast to the data pointer, (void *)(uintptr_t)method */
 
-    VMI_INIT_DATA_VBOX_SOCKET     /**< VBoxVMI socket path (char *), used with
+    VMI_INIT_DATA_VBOX_SOCKET,    /**< VBoxVMI socket path (char *), used with
                                        VMI_VBOX_ACCESS_METHOD_VBOXVMI */
+
+    VMI_INIT_DATA_MEMFLOW_CONNECTOR /**< memflow connector name (char *), default qemu_procfs */
 } vmi_init_data_type_t;
 
 /**
