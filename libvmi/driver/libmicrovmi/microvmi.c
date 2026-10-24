@@ -1121,8 +1121,9 @@ microvmi_mem_events(vmi_instance_t vmi, addr_t gfn, vmi_mem_access_t out_access,
 }
 
 // reply in a view (KEEP_MEMORY_VIEW: the Active view) and release the event's vCPU. A refused reply
-// leaves the vCPU parked and the event ours: retry the instruction plainly, in the requested view,
-// then in the Active view, so that the vCPU never stays parked
+// leaves the vCPU parked and the event ours: a refused emulation executes the instruction natively,
+// unrestricted; otherwise retry the instruction plainly, in the requested view, then in the Active
+// view, so that the vCPU never stays parked
 static status_t
 microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType reply, uint16_t view)
 {
@@ -1149,11 +1150,23 @@ microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType 
         case EventReplyType_EmulateInsn:
             reply.emulate_insn.view = view;
             break;
+        case EventReplyType_UnrestrictedStep:
+            reply.unrestricted_step.view = view;
+            break;
     }
     if (microvmi_reply_event(microvmi->ctx, event, reply))
         return VMI_SUCCESS;
     errprint("libmicrovmi: failed to reply to the event on vCPU %"PRIu16" (view %"PRIu16")\n", vcpu, view);
 
+    // like an emulation, ignoring the restrictions, but its reads and writes are real
+    if (reply.tag == EventReplyType_Emulate || reply.tag == EventReplyType_EmulateNoWrite
+            || reply.tag == EventReplyType_EmulateReadData) {
+        EventReplyType step = { .tag = EventReplyType_UnrestrictedStep, .unrestricted_step = { .view = view } };
+        if (microvmi_reply_event(microvmi->ctx, event, step)) {
+            errprint("libmicrovmi: vCPU %"PRIu16" executed the instruction natively, unrestricted, instead\n", vcpu);
+            return VMI_SUCCESS;
+        }
+    }
     EventReplyType retry = { .tag = EventReplyType_Continue, .continue_ = { .reinject = false, .view = view } };
     if (reply.tag != EventReplyType_Continue && microvmi_reply_event(microvmi->ctx, event, retry))
         return VMI_FAILURE;
