@@ -44,6 +44,8 @@ typedef struct microvmi_instance {
     bool debug_on;   // Debug exception intercept set on every vCPU
     bool views_on;   // Memory views enabled (LibVMI's alternate SLAT)
     GHashTable *restricted;  // (view, GFN) pages whose access this client restricted, restored at shutdown
+    registers_t *cached_regs;  // per-vCPU cached registers for parked vCPUs
+    bool *regs_cached;         // per-vCPU: registers are cached
 } microvmi_instance_t;
 
 // restricted table key: the Memory view above bit 48, the GFN below
@@ -55,6 +57,22 @@ static inline microvmi_instance_t *
 microvmi_get_instance(vmi_instance_t vmi)
 {
     return (microvmi_instance_t *) vmi->driver.driver_data;
+}
+
+static inline void
+microvmi_invalidate_vcpu_regs_cache(microvmi_instance_t *microvmi, unsigned long vcpu)
+{
+    if (microvmi->regs_cached && vcpu < 256)
+        microvmi->regs_cached[vcpu] = false;
+}
+
+static inline void
+microvmi_invalidate_all_regs_cache(microvmi_instance_t *microvmi, unsigned long num_vcpus)
+{
+    if (microvmi->regs_cached) {
+        for (unsigned long i = 0; i < num_vcpus; i++)
+            microvmi->regs_cached[i] = false;
+    }
 }
 
 static status_t
@@ -261,7 +279,9 @@ microvmi_init_vmi(vmi_instance_t vmi, uint32_t UNUSED(init_flags), vmi_init_data
     vmi->num_vcpus = vcpu_count;
 
     microvmi->sstep_on = g_try_new0(bool, vcpu_count);
-    if (!microvmi->sstep_on)
+    microvmi->cached_regs = g_try_new0(registers_t, vcpu_count);
+    microvmi->regs_cached = g_try_new0(bool, vcpu_count);
+    if (!microvmi->sstep_on || !microvmi->cached_regs || !microvmi->regs_cached)
         return VMI_FAILURE;
     microvmi->restricted = g_hash_table_new(g_direct_hash, g_direct_equal);
 
@@ -286,6 +306,8 @@ microvmi_destroy_driver(vmi_instance_t vmi)
         microvmi_destroy(microvmi->ctx);
     }
     g_free(microvmi->sstep_on);
+    g_free(microvmi->cached_regs);
+    g_free(microvmi->regs_cached);
     if (microvmi->restricted)
         g_hash_table_destroy(microvmi->restricted);
     g_free(microvmi->name);
@@ -410,8 +432,15 @@ microvmi_to_x86(const X86Registers *r, x86_registers_t *x86)
 static status_t
 microvmi_get_vcpuregs(vmi_instance_t vmi, registers_t *regs, unsigned long vcpu)
 {
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
+   
+    if (vcpu < vmi->num_vcpus && microvmi->regs_cached[vcpu]) {
+        *regs = microvmi->cached_regs[vcpu];
+        return VMI_SUCCESS;
+    }
+
     Registers microvmi_regs;
-    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu, &microvmi_regs))
+    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi->ctx, (uint16_t) vcpu, &microvmi_regs))
         return VMI_FAILURE;
 
     memset(regs, 0, sizeof(*regs));
@@ -635,17 +664,22 @@ microvmi_write_x86(vmi_instance_t vmi, Registers *current, const x86_registers_t
 static status_t
 microvmi_set_vcpuregs(vmi_instance_t vmi, registers_t *regs, unsigned long vcpu)
 {
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
     Registers current;
-    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu, &current))
+    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi->ctx, (uint16_t) vcpu, &current))
         return VMI_FAILURE;
-    return microvmi_write_x86(vmi, &current, &regs->x86, (uint16_t) vcpu);
+    status_t status = microvmi_write_x86(vmi, &current, &regs->x86, (uint16_t) vcpu);
+    if (status == VMI_SUCCESS)
+        microvmi_invalidate_vcpu_regs_cache(microvmi, vcpu);
+    return status;
 }
 
 static status_t
 microvmi_set_vcpureg(vmi_instance_t vmi, uint64_t value, reg_t reg, unsigned long vcpu)
 {
+    microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
     Registers current;
-    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi_get_instance(vmi)->ctx, (uint16_t) vcpu, &current))
+    if (vcpu > UINT16_MAX || !microvmi_read_registers(microvmi->ctx, (uint16_t) vcpu, &current))
         return VMI_FAILURE;
 
     x86_registers_t x86;
@@ -654,7 +688,10 @@ microvmi_set_vcpureg(vmi_instance_t vmi, uint64_t value, reg_t reg, unsigned lon
     if (!field)
         return VMI_FAILURE;
     *field = value;
-    return microvmi_write_x86(vmi, &current, &x86, (uint16_t) vcpu);
+    status_t status = microvmi_write_x86(vmi, &current, &x86, (uint16_t) vcpu);
+    if (status == VMI_SUCCESS)
+        microvmi_invalidate_vcpu_regs_cache(microvmi, vcpu);
+    return status;
 }
 
 static void *
@@ -691,7 +728,10 @@ microvmi_pause_vm(vmi_instance_t vmi)
 static status_t
 microvmi_resume_vm(vmi_instance_t vmi)
 {
-    return microvmi_resume(microvmi_get_instance(vmi)->ctx) ? VMI_SUCCESS : VMI_FAILURE;
+    status_t status = microvmi_resume(microvmi_get_instance(vmi)->ctx) ? VMI_SUCCESS : VMI_FAILURE;
+    if (status == VMI_SUCCESS)
+        microvmi_invalidate_all_regs_cache(microvmi_get_instance(vmi), vmi->num_vcpus);
+    return status;
 }
 
 /*
@@ -1041,7 +1081,9 @@ microvmi_mem_event(vmi_instance_t vmi, addr_t gfn, vmi_mem_access_t out_access)
 static status_t
 microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType reply, uint16_t view)
 {
-    uint16_t vcpu = event->vcpu, active = event->view;  // a successful reply frees the event
+    uint16_t vcpu = event->vcpu, active = event->view;
+    if (microvmi->regs_cached && vcpu < 256)
+        microvmi->regs_cached[vcpu] = false;
 
     switch (reply.tag) {
         case EventReplyType_Continue:
@@ -1154,21 +1196,29 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         return microvmi_reply(microvmi, event, breakpoint);
     }
 
-    registers_t regs;
-    if (VMI_FAILURE == microvmi_get_vcpuregs(vmi, &regs, vcpu)) {
-        errprint("libmicrovmi: failed to read the registers of vCPU %"PRIu16" at an event\n", vcpu);
-        // no reinjection: the vCPU re-executes and raises the event again (a CR/MSR write proceeds unseen)
-        microvmi_reply(microvmi, event, false);
-        return VMI_FAILURE;
+    // Use registers from the event if available (VBoxVMI protocol v10+)
+    Registers microvmi_regs;
+    if (microvmi_event_get_registers(event, &microvmi_regs)) {
+        memset(&microvmi->cached_regs[vcpu], 0, sizeof(microvmi->cached_regs[vcpu]));
+        microvmi_to_x86(&microvmi_regs.x86, &microvmi->cached_regs[vcpu].x86);
+        microvmi->regs_cached[vcpu] = true;
+    } else {
+        microvmi->regs_cached[vcpu] = false;
+        if (VMI_FAILURE == microvmi_get_vcpuregs(vmi, &microvmi->cached_regs[vcpu], vcpu)) {
+            errprint("libmicrovmi: failed to read the registers of vCPU %"PRIu16" at an event\n", vcpu);
+            microvmi_reply(microvmi, event, false);
+            return VMI_FAILURE;
+        }
+        microvmi->regs_cached[vcpu] = true;
     }
 
-    libvmi_event->x86_regs = &regs.x86;
+    libvmi_event->x86_regs = &microvmi->cached_regs[vcpu].x86;
     libvmi_event->vcpu_id = vcpu;
     libvmi_event->slat_id = event->view;
     if (breakpoint) {
         libvmi_event->interrupt_event.gfn = event->kind.breakpoint.gpa >> vmi->page_shift;
-        libvmi_event->interrupt_event.offset = regs.x86.rip & VMI_BIT_MASK(0, 11);
-        libvmi_event->interrupt_event.gla = regs.x86.rip;
+        libvmi_event->interrupt_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
+        libvmi_event->interrupt_event.gla = microvmi->cached_regs[vcpu].x86.rip;
         libvmi_event->interrupt_event.insn_length = event->kind.breakpoint.insn_len;
         // default reinject behavior: invalid, only 1 reinjects
         libvmi_event->interrupt_event.reinject = -1;
@@ -1185,9 +1235,9 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         libvmi_event->cpuid_event.subleaf = event->kind.cpuid.subleaf;
         libvmi_event->cpuid_event.insn_length = event->kind.cpuid.insn_len;
     } else if (event->kind.tag == EventType_Debug) {
-        libvmi_event->debug_event.gfn = regs.x86.rip >> vmi->page_shift;
-        libvmi_event->debug_event.offset = regs.x86.rip & VMI_BIT_MASK(0, 11);
-        libvmi_event->debug_event.gla = regs.x86.rip;
+        libvmi_event->debug_event.gfn = microvmi->cached_regs[vcpu].x86.rip >> vmi->page_shift;
+        libvmi_event->debug_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
+        libvmi_event->debug_event.gla = microvmi->cached_regs[vcpu].x86.rip;
         libvmi_event->debug_event.insn_length = 0;  // Unknown at the event
         libvmi_event->debug_event.type = 3;  // HVMOP_TRAP_hw_exc for #DB
         libvmi_event->debug_event.reinject = 1;  // Reinject by default
@@ -1198,8 +1248,8 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         libvmi_event->mem_event.out_access = out_access;
     } else {
         libvmi_event->ss_event.gfn = event->kind.singlestep.gpa >> vmi->page_shift;
-        libvmi_event->ss_event.offset = regs.x86.rip & VMI_BIT_MASK(0, 11);
-        libvmi_event->ss_event.gla = regs.x86.rip;
+        libvmi_event->ss_event.offset = microvmi->cached_regs[vcpu].x86.rip & VMI_BIT_MASK(0, 11);
+        libvmi_event->ss_event.gla = microvmi->cached_regs[vcpu].x86.rip;
     }
 
     vmi->event_callback = 1;
@@ -1225,13 +1275,15 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     }
     // Like Xen and KVM, only the GPRs, RIP and RFLAGS: injectors reply with full snapshots taken
     // earlier, maybe on another vCPU, whose per-CPU state (TR base, CR3) must not be loaded.
-    // regs.x86, not libvmi_event->x86_regs: SET_EMUL_* responses overwrite that pointer
+    // microvmi->cached_regs[vcpu].x86, not libvmi_event->x86_regs: SET_EMUL_* responses overwrite that pointer
     if (response & VMI_EVENT_RESPONSE_SET_REGISTERS) {
         Registers current;
         bool written = microvmi_read_registers(microvmi->ctx, vcpu, &current);
         if (written) {
-            gprs_to_microvmi(&regs.x86, &current.x86);
+            gprs_to_microvmi(&microvmi->cached_regs[vcpu].x86, &current.x86);
             written = microvmi_write_registers(microvmi->ctx, vcpu, &current);
+            if (written)
+                microvmi_invalidate_vcpu_regs_cache(microvmi, vcpu);
         }
         if (!written) {
             errprint("libmicrovmi: failed to write the registers of vCPU %"PRIu16" at an event\n", vcpu);
