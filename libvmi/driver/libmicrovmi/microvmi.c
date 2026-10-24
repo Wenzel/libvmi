@@ -1499,6 +1499,12 @@ microvmi_free_gfn(vmi_instance_t vmi, uint64_t gfn)
     return microvmi_free_hidden_page(microvmi_get_instance(vmi)->ctx, gfn) ? VMI_SUCCESS : VMI_FAILURE;
 }
 
+static uint32_t
+microvmi_hidden_page_pool_size_fn(vmi_instance_t vmi)
+{
+    return microvmi_hidden_page_pool_size(microvmi_get_instance(vmi)->ctx);
+}
+
 // the guest runs normally after vmi_destroy, even without vmi_clear_event
 static void
 microvmi_events_destroy(vmi_instance_t vmi)
@@ -1568,6 +1574,7 @@ driver_libmicrovmi_setup(vmi_instance_t vmi)
     driver.shutdown_single_step_ptr = &microvmi_shutdown_single_step;
     driver.alloc_hidden_gfn_ptr = &microvmi_alloc_hidden_gfn;
     driver.free_gfn_ptr = &microvmi_free_gfn;
+    driver.hidden_page_pool_size_ptr = &microvmi_hidden_page_pool_size_fn;
     driver.slat_state_ptr = &microvmi_slat_state;
     driver.slat_control_ptr = &microvmi_slat_control;
     driver.slat_create_ptr = &microvmi_slat_create;

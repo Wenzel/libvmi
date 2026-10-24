@@ -121,6 +121,8 @@ typedef struct driver_interface {
     status_t (*free_gfn_ptr)(
         vmi_instance_t,
         uint64_t gfn);
+    uint32_t (*hidden_page_pool_size_ptr)(
+        vmi_instance_t);
     void *(*read_page_ptr) (
         vmi_instance_t,
         addr_t);

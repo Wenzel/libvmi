@@ -2657,6 +2657,16 @@ status_t vmi_free_gfn(
     uint64_t gfn) NOEXCEPT;
 
 /**
+ * Returns the Hidden page pool size (VBoxInternal/VMI/HiddenPages), or 0 if not applicable.
+ * VirtualBox only.
+ *
+ * @param[in] vmi LibVMI Instance
+ * @return Pool size, or 0
+ */
+uint32_t vmi_hidden_page_pool_size(
+    vmi_instance_t vmi) NOEXCEPT;
+
+/**
  * Pauses the VM.  Use vmi_resume_vm to resume the VM after pausing
  * it.  If accessing a memory file, this has no effect.
  *

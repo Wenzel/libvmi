@@ -452,6 +452,17 @@ vmi_free_gfn(
     return driver_free_gfn(vmi, gfn);
 }
 
+uint32_t
+vmi_hidden_page_pool_size(vmi_instance_t vmi)
+{
+#ifdef ENABLE_SAFETY_CHECKS
+    if (!vmi)
+        return 0;
+#endif
+
+    return driver_hidden_page_pool_size(vmi);
+}
+
 status_t
 vmi_set_vcpureg(
     vmi_instance_t vmi,

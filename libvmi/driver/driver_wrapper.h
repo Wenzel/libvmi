@@ -346,6 +346,19 @@ driver_free_gfn(
     return vmi->driver.free_gfn_ptr(vmi, gfn);
 }
 
+static inline uint32_t
+driver_hidden_page_pool_size(vmi_instance_t vmi)
+{
+#ifdef ENABLE_SAFETY_CHECKS
+    if (!vmi->driver.initialized || !vmi->driver.hidden_page_pool_size_ptr) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_hidden_page_pool_size function not implemented.\n");
+        return 0;
+    }
+#endif
+
+    return vmi->driver.hidden_page_pool_size_ptr(vmi);
+}
+
 static inline status_t
 driver_set_vcpureg(
     vmi_instance_t vmi,
