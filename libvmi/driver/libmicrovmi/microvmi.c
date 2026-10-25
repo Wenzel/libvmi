@@ -48,6 +48,7 @@ typedef struct microvmi_instance {
     unsigned int pauses;     // vmi_pause_vm calls not yet resumed: VBoxVMI's pause is not counted
     registers_t *cached_regs;  // per-vCPU cached registers for parked vCPUs
     bool *regs_cached;         // per-vCPU: registers are cached
+    registers_t *event_regs;   // per-vCPU copy handed to event callbacks, which may change it: never the cache
     bool lost;                 // VirtualBox: listening failed, closing the VBoxVMI session undoes every event
 } microvmi_instance_t;
 
@@ -291,7 +292,8 @@ microvmi_init_vmi(vmi_instance_t vmi, uint32_t UNUSED(init_flags), vmi_init_data
     microvmi->sstep_on = g_try_new0(bool, vcpu_count);
     microvmi->cached_regs = g_try_new0(registers_t, vcpu_count);
     microvmi->regs_cached = g_try_new0(bool, vcpu_count);
-    if (!microvmi->sstep_on || !microvmi->cached_regs || !microvmi->regs_cached)
+    microvmi->event_regs = g_try_new0(registers_t, vcpu_count);
+    if (!microvmi->sstep_on || !microvmi->cached_regs || !microvmi->regs_cached || !microvmi->event_regs)
         return VMI_FAILURE;
     microvmi->restricted = g_hash_table_new(g_direct_hash, g_direct_equal);
     microvmi->converting = g_hash_table_new(g_direct_hash, g_direct_equal);
@@ -319,6 +321,7 @@ microvmi_destroy_driver(vmi_instance_t vmi)
     g_free(microvmi->sstep_on);
     g_free(microvmi->cached_regs);
     g_free(microvmi->regs_cached);
+    g_free(microvmi->event_regs);
     if (microvmi->restricted)
         g_hash_table_destroy(microvmi->restricted);
     if (microvmi->converting)
@@ -1292,12 +1295,15 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
         microvmi->regs_cached[vcpu] = true;
     }
 
+    // Callbacks get a copy: an injector may load another vCPU's saved registers into it, which
+    // vmi_get_vcpuregs must not return (their GS bases would make two vCPUs share a KPCR).
+    microvmi->event_regs[vcpu] = microvmi->cached_regs[vcpu];
     event_response_t response = 0, own = 0;  // all callbacks' responses, the libvmi_event's own
     libvmi_event = NULL;
     vmi->event_callback = 1;
     for (unsigned int i = 0; i < count; i++) {
         vmi_event_t *e = events[i];
-        e->x86_regs = &microvmi->cached_regs[vcpu].x86;
+        e->x86_regs = &microvmi->event_regs[vcpu].x86;
         e->vcpu_id = vcpu;
         e->slat_id = event->view;
         if (breakpoint) {
@@ -1369,12 +1375,12 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
     }
     // Like Xen and KVM, only the GPRs, RIP and RFLAGS: injectors reply with full snapshots taken
     // earlier, maybe on another vCPU, whose per-CPU state (TR base, CR3) must not be loaded.
-    // microvmi->cached_regs[vcpu].x86, not libvmi_event->x86_regs: SET_EMUL_* responses overwrite that pointer
+    // microvmi->event_regs[vcpu].x86, not libvmi_event->x86_regs: SET_EMUL_* responses overwrite that pointer
     if (response & VMI_EVENT_RESPONSE_SET_REGISTERS) {
         Registers current;
         bool written = microvmi_read_registers(microvmi->ctx, vcpu, &current);
         if (written) {
-            gprs_to_microvmi(&microvmi->cached_regs[vcpu].x86, &current.x86);
+            gprs_to_microvmi(&microvmi->event_regs[vcpu].x86, &current.x86);
             written = microvmi_write_registers(microvmi->ctx, vcpu, &current);
             if (written)
                 microvmi_invalidate_vcpu_regs_cache(microvmi, vcpu);
