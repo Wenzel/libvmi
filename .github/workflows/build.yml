@@ -4,9 +4,9 @@ on:
   pull_request:
 
 env:
-  # libmicrovmi commit LibVMI builds against: Wenzel/libmicrovmi#323 (default VirtualBox access
-  # method, microvmi_get_vcpu_count), merged into dev
-  LIBMICROVMI_REV: df0f1c7598d204bec61fc29e5dfc8d3c99070290
+  # libmicrovmi commit LibVMI builds against: dev with VBoxVMI events, memory views and Hidden
+  # pages (microvmi_get_ram_size and the event/view C API)
+  LIBMICROVMI_REV: 02173224cfdfa6214c19173fd7665191461ecd22
 
 jobs:
   build:
