@@ -48,6 +48,7 @@ typedef struct microvmi_instance {
     unsigned int pauses;     // vmi_pause_vm calls not yet resumed: VBoxVMI's pause is not counted
     registers_t *cached_regs;  // per-vCPU cached registers for parked vCPUs
     bool *regs_cached;         // per-vCPU: registers are cached
+    bool lost;                 // VirtualBox: listening failed, closing the VBoxVMI session undoes every event
 } microvmi_instance_t;
 
 // restricted table key: the Memory view above bit 48, the GFN below
@@ -311,7 +312,7 @@ microvmi_destroy_driver(vmi_instance_t vmi)
         return;
 
     if (microvmi->ctx) {
-        if (microvmi->sstep_on)
+        if (microvmi->sstep_on && !microvmi->lost)
             microvmi_events_destroy(vmi);
         microvmi_destroy(microvmi->ctx);
     }
@@ -1441,6 +1442,7 @@ microvmi_events_listen(vmi_instance_t vmi, uint32_t timeout)
 
     if (!microvmi_listen(microvmi_get_instance(vmi)->ctx, timeout, &event)) {
         errprint("libmicrovmi: failed to listen for events\n");
+        microvmi_get_instance(vmi)->lost = vmi->mode == VMI_VIRTUALBOX;
         return VMI_FAILURE;
     }
     if (!event)
