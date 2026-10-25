@@ -452,7 +452,7 @@ static status_t
 microvmi_get_vcpuregs(vmi_instance_t vmi, registers_t *regs, unsigned long vcpu)
 {
     microvmi_instance_t *microvmi = microvmi_get_instance(vmi);
-   
+
     if (vcpu < vmi->num_vcpus && microvmi->regs_cached[vcpu]) {
         *regs = microvmi->cached_regs[vcpu];
         return VMI_SUCCESS;
@@ -1231,23 +1231,23 @@ microvmi_process_event(vmi_instance_t vmi, Event *event)
             libvmi_event = vmi->debug_event;
             break;
         case EventType_Pagefault: {
-            if (event->kind.pagefault.access & Access_R)
-                out_access |= VMI_MEMACCESS_R;
-            if (event->kind.pagefault.access & Access_W)
-                out_access |= VMI_MEMACCESS_W;
-            if (event->kind.pagefault.access & Access_X)
-                out_access |= VMI_MEMACCESS_X;
-            gfn = event->kind.pagefault.gpa >> vmi->page_shift;
-            // like Xen, a W2X page becomes RW at a write, unreported; an RWX2N one RWX at any access, reported
-            vmi_mem_access_t converting = GPOINTER_TO_UINT(g_hash_table_lookup(microvmi->converting,
-                                          RESTRICTED_KEY(event->view, gfn)));
-            if (converting)
-                microvmi_set_page(vmi, event->view, gfn, converting == VMI_MEMACCESS_W2X
-                                  ? Access_R | Access_W : Access_R | Access_W | Access_X);
-            if (converting != VMI_MEMACCESS_W2X)
-                count = microvmi_mem_events(vmi, gfn, out_access, events, G_N_ELEMENTS(events));
-            break;
-        }
+    if (event->kind.pagefault.access & Access_R)
+        out_access |= VMI_MEMACCESS_R;
+    if (event->kind.pagefault.access & Access_W)
+        out_access |= VMI_MEMACCESS_W;
+    if (event->kind.pagefault.access & Access_X)
+        out_access |= VMI_MEMACCESS_X;
+    gfn = event->kind.pagefault.gpa >> vmi->page_shift;
+    // like Xen, a W2X page becomes RW at a write, unreported; an RWX2N one RWX at any access, reported
+    vmi_mem_access_t converting = GPOINTER_TO_UINT(g_hash_table_lookup(microvmi->converting,
+                                  RESTRICTED_KEY(event->view, gfn)));
+    if (converting)
+        microvmi_set_page(vmi, event->view, gfn, converting == VMI_MEMACCESS_W2X
+                          ? Access_R | Access_W : Access_R | Access_W | Access_X);
+    if (converting != VMI_MEMACCESS_W2X)
+        count = microvmi_mem_events(vmi, gfn, out_access, events, G_N_ELEMENTS(events));
+    break;
+}
         default:
             break;
     }
