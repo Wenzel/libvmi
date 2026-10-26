@@ -1162,12 +1162,15 @@ microvmi_reply_with(microvmi_instance_t *microvmi, Event *event, EventReplyType 
         return VMI_SUCCESS;
     errprint("libmicrovmi: failed to reply to the event on vCPU %"PRIu16" (view %"PRIu16")\n", vcpu, view);
 
-    // like an emulation, ignoring the restrictions, but its reads and writes are real
+    // like an emulation, ignoring the restrictions, but its reads and writes are real: what EMULATE
+    // asks for, not EMULATE_NOWRITE or SET_EMUL_READ_DATA. Still VMI_SUCCESS: a listen failure ends
+    // DRAKVUF's session, worse than one real access; the message is the caller's only signal.
     if (reply.tag == EventReplyType_Emulate || reply.tag == EventReplyType_EmulateNoWrite
             || reply.tag == EventReplyType_EmulateReadData) {
         EventReplyType step = { .tag = EventReplyType_UnrestrictedStep, .unrestricted_step = { .view = view } };
         if (microvmi_reply_event(microvmi->ctx, event, step)) {
-            errprint("libmicrovmi: vCPU %"PRIu16" executed the instruction natively, unrestricted, instead\n", vcpu);
+            errprint("libmicrovmi: vCPU %"PRIu16" executed the instruction natively, unrestricted, instead%s\n", vcpu,
+                     reply.tag == EventReplyType_Emulate ? "" : ": its reads and writes were real");
             return VMI_SUCCESS;
         }
     }
