@@ -427,6 +427,19 @@ vmi_alloc_gfn(
 }
 
 status_t
+vmi_alloc_hidden_gfn(
+    vmi_instance_t vmi,
+    uint64_t *gfn)
+{
+#ifdef ENABLE_SAFETY_CHECKS
+    if (!vmi || !gfn)
+        return VMI_FAILURE;
+#endif
+
+    return driver_alloc_hidden_gfn(vmi, gfn);
+}
+
+status_t
 vmi_free_gfn(
     vmi_instance_t vmi,
     uint64_t gfn)
@@ -437,6 +450,17 @@ vmi_free_gfn(
 #endif
 
     return driver_free_gfn(vmi, gfn);
+}
+
+uint32_t
+vmi_hidden_page_pool_size(vmi_instance_t vmi)
+{
+#ifdef ENABLE_SAFETY_CHECKS
+    if (!vmi)
+        return 0;
+#endif
+
+    return driver_hidden_page_pool_size(vmi);
 }
 
 status_t

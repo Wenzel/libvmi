@@ -71,7 +71,11 @@ typedef enum vmi_mode {
 
     VMI_FILE, /**< libvmi is viewing a file on disk */
 
-    VMI_BAREFLANK /** <libvmi is monitoring a Bareflank VM */
+    VMI_BAREFLANK, /** <libvmi is monitoring a Bareflank VM */
+
+    VMI_VIRTUALBOX, /**< libvmi is monitoring a VirtualBox VM */
+
+    VMI_MEMFLOW /**< libvmi is monitoring a memflow target */
 } vmi_mode_t;
 
 typedef enum vmi_config {
@@ -225,8 +229,31 @@ typedef enum {
 
     VMI_INIT_DATA_MEMMAP,    /**< memory_map_t pointer */
 
-    VMI_INIT_DATA_KVMI_SOCKET     /**< kvmi socket path */
+    VMI_INIT_DATA_KVMI_SOCKET,    /**< kvmi socket path */
+
+    VMI_INIT_DATA_VBOX_ACCESS_METHOD, /**< VirtualBox access method: a vmi_vbox_access_method_t
+                                           cast to the data pointer, (void *)(uintptr_t)method */
+
+    VMI_INIT_DATA_VBOX_SOCKET,    /**< VBoxVMI socket path (char *), used with
+                                       VMI_VBOX_ACCESS_METHOD_VBOXVMI */
+
+    VMI_INIT_DATA_MEMFLOW_CONNECTOR /**< memflow connector name (char *), default qemu_procfs */
 } vmi_init_data_type_t;
+
+/**
+ * VirtualBox access methods for VMI_INIT_DATA_VBOX_ACCESS_METHOD.
+ *
+ * Without VMI_INIT_DATA_VBOX_ACCESS_METHOD, libmicrovmi uses the VBoxVMI
+ * method at the VM's default socket and falls back to the MachineDebugger
+ * method only when that socket does not exist. An explicit method never
+ * falls back. VMI_VBOX_ACCESS_METHOD_VBOXVMI without VMI_INIT_DATA_VBOX_SOCKET
+ * uses the VM's default socket.
+ */
+typedef enum {
+    VMI_VBOX_ACCESS_METHOD_MACHINE_DEBUGGER = 1, /**< VirtualBox IMachineDebugger API */
+
+    VMI_VBOX_ACCESS_METHOD_VBOXVMI = 2           /**< VBoxVMI unix socket */
+} vmi_vbox_access_method_t;
 
 /**
  * Structures used to pass initialization data to LibVMI
@@ -1418,6 +1445,8 @@ status_t vmi_read_va(
  * Each page will have it's own pointer in access_ptrs output array. Be aware that
  * not all virtual pages may be allocated and in such case, the corresponding array item
  * will be set to NULL. Remember to call munmap() on each array item afterwards.
+ * The libmicrovmi driver returns a private snapshot: changes to a writable mapping
+ * do not write back to the guest. Use vmi_write() to modify guest memory.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] ctx Access context
@@ -1437,6 +1466,7 @@ status_t vmi_mmap_guest(
  * Maps the physical memory pages of the guest listed in pfns into the host
  * Each page will have it's own pointer in access_ptrs output array.
  * Remember to call munmap() on each array item afterwards.
+ * The libmicrovmi driver returns a private snapshot, not a write-through mapping.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] pfns Array of size [num_pages] containing guest's page frame numbers to map
@@ -1457,6 +1487,7 @@ vmi_mmap_guest_pfns(
  * Maps num_pages of the guest's physical memory into host, starting at the provided paddr.
  * Each page will have it's own pointer in access_ptrs output array.
  * Remember to call munmap() on each array item afterwards.
+ * The libmicrovmi driver returns a private snapshot, not a write-through mapping.
  *
  * @param[in] vmi LibVMI instance
  * @param[in] paddr Physical address to map
@@ -2237,7 +2268,7 @@ uint64_t vmi_get_vmid(
 /**
  * Gets the current access mode for LibVMI, which tells what
  * resource is being using to access the memory (e.g., VMI_XEN,
- * VMI_KVM, or VMI_FILE).
+ * VMI_KVM, VMI_VIRTUALBOX or VMI_MEMFLOW).
  *
  * If LibVMI is already initialized it will return the active
  * mode. If the LibVMI instance passed is NULL, it will
@@ -2472,7 +2503,8 @@ unsigned int vmi_get_num_vcpus (
  * @param[in] vmi LibVMI instance
  * @param[in] vcpu The index of the VCPU to access, use 0 for single VCPU systems
  * @param[in] virtual_address The cr2 address for requested page fault
- * @param[in] error_code The error code for the requested page fault. ~0u means 'ignore'
+ * @param[in] error_code The page fault error code. The libmicrovmi driver passes it
+ *                       unchanged to the backend; ~0u is not an ignore sentinel here.
  * @return VMI_SUCCESS or VMI_FAILURE
  */
 status_t
@@ -2599,13 +2631,25 @@ status_t vmi_alloc_gfn(
     vmi_instance_t vmi,
     uint64_t gfn) NOEXCEPT;
 
+/**
+ * Allocates a physical page the hypervisor picks, outside the guest's RAM:
+ * the guest is never told about it, it is meant as a target for
+ * vmi_slat_change_gfn. Fails once the hypervisor's pool is exhausted
+ * (VirtualBox: Hidden pages, VBoxInternal/VMI/HiddenPages, set before the VM starts).
+ *
+ * @param[in] vmi LibVMI Instance
+ * @param[out] gfn gfn of the allocated physical page
+ */
+status_t vmi_alloc_hidden_gfn(
+    vmi_instance_t vmi,
+    uint64_t *gfn) NOEXCEPT;
 
 /**
  * Frees a physical page that has previously been allocated via
- * vmi_alloc_gfn.
+ * vmi_alloc_gfn or vmi_alloc_hidden_gfn.
  * Note that the maximum physical address cached by libvmi
  * will not be updated accordingly. Freeing a page that has not
- * been allocated via vmi_alloc_gfn is undefined behavior.
+ * been allocated via vmi_alloc_gfn or vmi_alloc_hidden_gfn is undefined behavior.
  *
  * @param[in] vmi LibVMI Instance
  * @param[in] gfn gfn of physical page to be freed
@@ -2613,6 +2657,16 @@ status_t vmi_alloc_gfn(
 status_t vmi_free_gfn(
     vmi_instance_t vmi,
     uint64_t gfn) NOEXCEPT;
+
+/**
+ * Returns the Hidden page pool size (VBoxInternal/VMI/HiddenPages), or 0 if not applicable.
+ * VirtualBox only.
+ *
+ * @param[in] vmi LibVMI Instance
+ * @return Pool size, or 0
+ */
+uint32_t vmi_hidden_page_pool_size(
+    vmi_instance_t vmi) NOEXCEPT;
 
 /**
  * Pauses the VM.  Use vmi_resume_vm to resume the VM after pausing

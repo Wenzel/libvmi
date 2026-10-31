@@ -115,9 +115,14 @@ typedef struct driver_interface {
     status_t (*alloc_gfn_ptr)(
         vmi_instance_t,
         uint64_t gfn);
+    status_t (*alloc_hidden_gfn_ptr)(
+        vmi_instance_t,
+        uint64_t *gfn);
     status_t (*free_gfn_ptr)(
         vmi_instance_t,
         uint64_t gfn);
+    uint32_t (*hidden_page_pool_size_ptr)(
+        vmi_instance_t);
     void *(*read_page_ptr) (
         vmi_instance_t,
         addr_t);
@@ -163,6 +168,7 @@ typedef struct driver_interface {
         addr_t gpfn_end,
         vmi_mem_access_t,
         uint16_t vmm_pagetable_id);
+    status_t (*clear_generic_mem_access_ptr)(vmi_instance_t, vmi_mem_access_t);
     status_t (*start_single_step_ptr)(
         vmi_instance_t,
         single_step_event_t*);

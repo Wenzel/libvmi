@@ -1,3 +1,15 @@
+# lets every example select the VirtualBox access method, see vbox-init-data.h
+add_compile_options(-include ${CMAKE_CURRENT_SOURCE_DIR}/vbox-init-data.h)
+
+add_executable(pause-example pause-example.c)
+target_link_libraries(pause-example vmi_shared)
+
+add_executable(map-paddr map-paddr.c)
+target_link_libraries(map-paddr vmi_shared)
+
+add_executable(vcpu-info vcpu-info.c)
+target_link_libraries(vcpu-info vmi_shared)
+
 add_executable(map-addr map-addr.c)
 target_link_libraries(map-addr vmi_shared)
 

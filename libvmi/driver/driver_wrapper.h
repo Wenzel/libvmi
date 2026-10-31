@@ -317,6 +317,21 @@ driver_alloc_gfn(
 }
 
 static inline status_t
+driver_alloc_hidden_gfn(
+    vmi_instance_t vmi,
+    uint64_t *gfn)
+{
+#ifdef ENABLE_SAFETY_CHECKS
+    if (!vmi->driver.initialized || !vmi->driver.alloc_hidden_gfn_ptr) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_alloc_hidden_gfn function not implemented.\n");
+        return VMI_FAILURE;
+    }
+#endif
+
+    return vmi->driver.alloc_hidden_gfn_ptr(vmi, gfn);
+}
+
+static inline status_t
 driver_free_gfn(
     vmi_instance_t vmi,
     uint64_t gfn)
@@ -329,6 +344,19 @@ driver_free_gfn(
 #endif
 
     return vmi->driver.free_gfn_ptr(vmi, gfn);
+}
+
+static inline uint32_t
+driver_hidden_page_pool_size(vmi_instance_t vmi)
+{
+#ifdef ENABLE_SAFETY_CHECKS
+    if (!vmi->driver.initialized || !vmi->driver.hidden_page_pool_size_ptr) {
+        dbprint(VMI_DEBUG_DRIVER, "WARNING: driver_hidden_page_pool_size function not implemented.\n");
+        return 0;
+    }
+#endif
+
+    return vmi->driver.hidden_page_pool_size_ptr(vmi);
 }
 
 static inline status_t

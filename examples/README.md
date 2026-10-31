@@ -5,6 +5,42 @@ This folder contains a few examples of code using the LibVMI library.
 Note: some of them take an optional `[<socket>]` parameter. This refers to the
 `KVMi socket`, which needs to be specified when using the KVM driver.
 
+LibVMI talks to the hypervisor through libmicrovmi; VMI events are limited to
+INT3 interrupt, single-step, CR0/CR3/CR4 and MSR write, and memory (page
+access) events, with the `EMULATE`, `SET_EMUL_READ_DATA` and `SET_EMUL_INSN`
+responses (VirtualBox with the VBoxVMI access method; all but INT3 and
+single-step need VT-x), so `interrupt-event-example`,
+`singlestep-event-example`, `breakpoint-recoil-example`, `cr3-event-example`,
+`msr-event-example`, `mem-event-example`, `step-event-example`,
+`xen-emulate-response` and `breakpoint-emulate-example` run there, and the
+other event examples fail at event registration.
+
+Every example selects the VirtualBox access method from the environment
+(`vbox-init-data.h`, force-included by `CMakeLists.txt`, turns these into
+`vmi_init` init data):
+
+| variable | value | init data |
+|---|---|---|
+| `LIBVMI_VBOX_ACCESS_METHOD` | `machine-debugger` or `vboxvmi` | `VMI_INIT_DATA_VBOX_ACCESS_METHOD` |
+| `LIBVMI_VBOX_SOCKET` | VBoxVMI socket path | `VMI_INIT_DATA_VBOX_SOCKET` |
+
+Neither set: libmicrovmi's default (VBoxVMI at the VM's default socket,
+MachineDebugger when that socket does not exist). For example:
+
+    LIBVMI_VBOX_ACCESS_METHOD=machine-debugger ./vcpu-info myvm
+
+## pause-example
+
+Pauses the VM for 10 seconds, then resumes it.
+
+## map-paddr
+
+Reads and prints the physical page at the given (hexadecimal) address.
+
+## vcpu-info
+
+Prints the vCPU count, the max physical address and CR3/RIP of each vCPU.
+
 ## breakpoint-emulate-example
 
 Recoiling on a software breakpoint via instruction emulation.
